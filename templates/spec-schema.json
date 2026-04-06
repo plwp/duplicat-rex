@@ -1,0 +1,375 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://duplicat-rex.local/schemas/spec-schema.json",
+  "title": "duplicat-rex Spec Schema",
+  "description": "JSON Schema for all core duplicat-rex data structures: EvidenceRef, Fact, SpecItem, and SpecBundle.",
+  "$defs": {
+    "IsoTimestamp": {
+      "type": "string",
+      "description": "ISO 8601 UTC timestamp (e.g. 2024-01-15T10:30:00+00:00)",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+    },
+    "Uuid": {
+      "type": "string",
+      "description": "UUID v4",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "Sha256Hex16": {
+      "type": "string",
+      "description": "First 16 hex characters of a SHA-256 digest",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "Sha256Hex32": {
+      "type": "string",
+      "description": "First 32 hex characters of a SHA-256 digest",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "Authority": {
+      "type": "string",
+      "enum": ["authoritative", "observational", "anecdotal"],
+      "description": "Source trustworthiness tier. Rank: authoritative(3) > observational(2) > anecdotal(1)"
+    },
+    "Confidence": {
+      "type": "string",
+      "enum": ["high", "medium", "low"],
+      "description": "Confidence level. Rank: high(3) > medium(2) > low(1)"
+    },
+    "FactStatus": {
+      "type": "string",
+      "enum": ["unverified", "verified", "contradicted"],
+      "description": "Lifecycle status of a fact"
+    },
+    "BundleStatus": {
+      "type": "string",
+      "enum": ["draft", "validated", "snapshot"],
+      "description": "Lifecycle status of a spec bundle. Terminal: snapshot (immutable)"
+    },
+    "FactCategory": {
+      "type": "string",
+      "enum": [
+        "ui_component",
+        "user_flow",
+        "api_endpoint",
+        "ws_event",
+        "data_model",
+        "auth",
+        "business_rule",
+        "performance",
+        "integration",
+        "configuration"
+      ],
+      "description": "What aspect of the target the fact describes"
+    },
+    "SourceType": {
+      "type": "string",
+      "enum": [
+        "live_app",
+        "api_docs",
+        "help_center",
+        "video",
+        "marketing",
+        "community",
+        "changelog"
+      ],
+      "description": "Which recon source produced the fact"
+    },
+    "RedactionStatus": {
+      "type": "string",
+      "enum": ["clean", "redacted", "restricted"],
+      "description": "Whether secret material has been scrubbed from fact content"
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "description": "Pointer to a specific piece of source material. Must be sufficient to re-locate and re-verify the claim.",
+      "required": ["source_url", "captured_at"],
+      "additionalProperties": false,
+      "properties": {
+        "source_url": {
+          "type": "string",
+          "minLength": 1,
+          "description": "URL, file path, or deep-link to the source material"
+        },
+        "locator": {
+          "type": ["string", "null"],
+          "description": "CSS selector, JSON path, video timestamp, WS event name, DOM path, or endpoint"
+        },
+        "source_title": {
+          "type": ["string", "null"],
+          "description": "Human-readable page or document title"
+        },
+        "artifact_uri": {
+          "type": ["string", "null"],
+          "description": "Path to captured artifact (screenshot, HAR, transcript)"
+        },
+        "artifact_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 hex digest of the captured artifact for integrity verification"
+        },
+        "captured_at": {
+          "$ref": "#/$defs/IsoTimestamp",
+          "description": "ISO 8601 UTC when the evidence was captured"
+        },
+        "published_at": {
+          "oneOf": [
+            {"$ref": "#/$defs/IsoTimestamp"},
+            {"type": "null"}
+          ],
+          "description": "When the source was published (if known)"
+        },
+        "raw_excerpt": {
+          "type": ["string", "null"],
+          "maxLength": 2000,
+          "description": "Verbatim source text (max 2000 chars)"
+        }
+      }
+    },
+    "Fact": {
+      "type": "object",
+      "description": "The atomic unit of intelligence. Immutable content once created — updates create new Facts via supersedes chain.",
+      "required": [
+        "id",
+        "feature",
+        "category",
+        "claim",
+        "evidence",
+        "source_type",
+        "created_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid",
+          "description": "Unique fact identifier (UUID v4)"
+        },
+        "feature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Which scoped feature this fact relates to (e.g. 'boards', 'drag-drop')"
+        },
+        "category": {
+          "$ref": "#/$defs/FactCategory"
+        },
+        "claim": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable atomic assertion — one sentence, one testable claim"
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/EvidenceRef"},
+          "description": "At least one verifiable source pointer (INV-001)"
+        },
+        "source_type": {
+          "$ref": "#/$defs/SourceType"
+        },
+        "structured_data": {
+          "type": "object",
+          "description": "Category-specific structured data (e.g. method/path for api_endpoint)"
+        },
+        "module_name": {
+          "type": "string",
+          "description": "Concrete module name that produced this fact (e.g. 'browser_explore')"
+        },
+        "authority": {
+          "$ref": "#/$defs/Authority"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "run_id": {
+          "type": "string",
+          "description": "UUID of the recon run that produced this fact"
+        },
+        "status": {
+          "$ref": "#/$defs/FactStatus"
+        },
+        "verified_by": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/Uuid"},
+          "description": "IDs of corroborating Facts"
+        },
+        "contradicted_by": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/Uuid"},
+          "description": "IDs of contradicting Facts"
+        },
+        "supersedes": {
+          "oneOf": [
+            {"$ref": "#/$defs/Uuid"},
+            {"type": "null"}
+          ],
+          "description": "ID of the Fact this replaces (supersede chain)"
+        },
+        "corroborates": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/Uuid"},
+          "description": "IDs of facts this fact supports"
+        },
+        "contradicts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/Uuid"},
+          "description": "IDs of facts this fact opposes"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Monotonically increasing — new fact gets old.revision + 1 when superseded"
+        },
+        "deleted_at": {
+          "oneOf": [
+            {"$ref": "#/$defs/IsoTimestamp"},
+            {"type": "null"}
+          ],
+          "description": "ISO 8601 UTC when soft-deleted; null if active (INV-027)"
+        },
+        "observed_at": {
+          "oneOf": [
+            {"$ref": "#/$defs/IsoTimestamp"},
+            {"type": "null"}
+          ],
+          "description": "When the behavior was observed in the target"
+        },
+        "freshness_ttl_days": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "How many days before this fact should be re-verified"
+        },
+        "tags": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Freeform labels for filtering and grouping"
+        },
+        "redaction_status": {
+          "$ref": "#/$defs/RedactionStatus"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoTimestamp",
+          "description": "ISO 8601 UTC when this fact was created"
+        }
+      }
+    },
+    "SpecItem": {
+      "type": "object",
+      "description": "A single synthesised specification within a bundle.",
+      "required": ["feature", "spec_type", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "feature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Feature key"
+        },
+        "spec_type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Specification type (e.g. 'api_contract', 'ui_behavior', 'data_model')"
+        },
+        "content": {
+          "type": "object",
+          "description": "The synthesised specification"
+        },
+        "supporting_fact_ids": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/Uuid"},
+          "description": "IDs of Facts that support this spec item"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        }
+      }
+    },
+    "SpecBundle": {
+      "type": "object",
+      "description": "Versioned collection of synthesised specs. Transitions: draft -> validated -> snapshot (immutable).",
+      "required": ["id", "schema_version", "status", "created_at"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid",
+          "description": "Unique bundle identifier (UUID v4)"
+        },
+        "schema_version": {
+          "type": "string",
+          "description": "Schema format version (e.g. '1.0')"
+        },
+        "target": {
+          "type": "string",
+          "description": "Target domain being reconned (e.g. 'trello.com')"
+        },
+        "scope_id": {
+          "type": "string",
+          "description": "UUID of the Scope that defines this bundle's coverage"
+        },
+        "scope_hash": {
+          "type": "string",
+          "description": "Deterministic hash of the scope"
+        },
+        "scope": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Feature keys covered by this bundle"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Monotonically increasing per (target, scope_hash)"
+        },
+        "status": {
+          "$ref": "#/$defs/BundleStatus"
+        },
+        "spec_items": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/SpecItem"},
+          "description": "Synthesised specifications in this bundle"
+        },
+        "fact_ids": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/Uuid"},
+          "description": "All supporting Fact IDs"
+        },
+        "parent_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/Uuid"},
+            {"type": "null"}
+          ],
+          "description": "Previous bundle version ID (for diff operations)"
+        },
+        "content_hash": {
+          "oneOf": [
+            {"$ref": "#/$defs/Sha256Hex32"},
+            {"type": "null"}
+          ],
+          "description": "SHA-256 of canonical manifest — computed at snapshot time (INV-016)"
+        },
+        "snapshot_at": {
+          "oneOf": [
+            {"$ref": "#/$defs/IsoTimestamp"},
+            {"type": "null"}
+          ],
+          "description": "ISO 8601 UTC when this bundle was frozen as a snapshot"
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoTimestamp",
+          "description": "ISO 8601 UTC when this bundle was created"
+        },
+        "validated_at": {
+          "oneOf": [
+            {"$ref": "#/$defs/IsoTimestamp"},
+            {"type": "null"}
+          ],
+          "description": "ISO 8601 UTC when this bundle passed validation"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes about this bundle"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/Fact"},
+    {"$ref": "#/$defs/SpecBundle"}
+  ]
+}
