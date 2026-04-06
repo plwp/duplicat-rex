@@ -9,7 +9,15 @@ Duplicat-rex owns the **intelligence pipeline**: reconnaissance, spec synthesis,
 Three repos in play:
 1. **duplicat-rex** (this repo) — intelligence/recon engine
 2. **chief-wiggum** — build engine (configured as skill source)
-3. **output repo** (e.g. `plwp/trello-clone`) — the generated app, one per target
+3. **output repo** (e.g. `plwp/abuello`) — the generated app, one per target
+
+```mermaid
+graph LR
+    DR[duplicat-rex<br/>Intelligence Layer] -->|specs & issues| CW[chief-wiggum<br/>Build Engine]
+    CW -->|implementation| OUT[abuello<br/>Output App]
+    DR -->|compare| OUT
+    OUT -->|gaps| DR
+```
 
 ## Tech Stack
 
@@ -60,8 +68,63 @@ duplicat-rex duplicate trello.com --output plwp/trello-clone
 
 ## Core Loop
 
+```mermaid
+graph TD
+    R[Recon<br/>Multi-source intelligence] --> S[Spec Synthesis<br/>Typed specs with provenance]
+    S --> T[Test Generation<br/>Dual-execution test cases]
+    T --> B[Build<br/>via chief-wiggum]
+    B --> C[Compare<br/>Behavioral conformance]
+    C --> G{Gap<br/>Analysis}
+    G -->|gaps found| R
+    G -->|parity achieved| D[Deploy]
+    
+    style R fill:#1D76DB,color:#fff
+    style S fill:#5319E7,color:#fff
+    style C fill:#D93F0B,color:#fff
+    style G fill:#FBCA04,color:#000
+    style D fill:#0E8A16,color:#fff
 ```
-Recon → Spec → Test → Build (via CW) → Compare → Gap Analysis → Loop
+
+### Recon Sources (ranked by authority)
+
+```mermaid
+graph LR
+    subgraph Authoritative
+        LA[Live App<br/>Browser-use + Playwright]
+        AD[API Docs<br/>Official documentation]
+    end
+    subgraph Observational
+        HC[Help Center]
+        TV[Training Videos<br/>whisper + ffmpeg]
+    end
+    subgraph Anecdotal
+        MK[Marketing Pages]
+        RD[Reddit / Community]
+        CL[Changelog]
+    end
+    
+    LA & AD --> SS[Spec Store<br/>Facts with provenance]
+    HC & TV --> SS
+    MK & RD & CL --> SS
+    
+    style LA fill:#0E8A16,color:#fff
+    style AD fill:#0E8A16,color:#fff
+    style HC fill:#1D76DB,color:#fff
+    style TV fill:#1D76DB,color:#fff
+    style MK fill:#D93F0B,color:#fff
+    style RD fill:#D93F0B,color:#fff
+    style CL fill:#D93F0B,color:#fff
+```
+
+### Fact Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> UNVERIFIED: create()
+    UNVERIFIED --> VERIFIED: verify(corroborating_fact_id)
+    UNVERIFIED --> CONTRADICTED: contradict(contradicting_fact_id)
+    VERIFIED --> CONTRADICTED: contradict(contradicting_fact_id)
+    CONTRADICTED --> [*]: supersede(new_fact_id)
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for full details.
@@ -86,10 +149,15 @@ mypy scripts/
 scripts/
 ├── recon/               # Recon modules (browser, API docs, videos, community)
 ├── cli.py               # Typer CLI entry point
-├── spec_synthesizer.py  # LLM synthesis with provenance
-├── compare.py           # Behavioral conformance testing
-├── gap_analyzer.py      # Gap identification + circuit breaker
-└── scope.py             # Scope parsing + dependency graph
-templates/               # Spec schemas, prompt templates, report formats
-tests/                   # Pytest test suite
+├── keychain.py          # Secret management (system keyring)
+├── models.py            # Canonical data model (Fact, SpecBundle, enums)
+├── scope.py             # Scope parsing + dependency graph
+├── spec_store.py        # File-backed spec store with provenance
+├── spec_synthesizer.py  # LLM synthesis with provenance (planned)
+├── compare.py           # Behavioral conformance testing (planned)
+└── gap_analyzer.py      # Gap identification + circuit breaker (planned)
+templates/
+├── spec-schema.json     # JSON Schema Draft 2020-12 for all entities
+└── ...                  # Prompt templates, report formats
+tests/                   # 224+ pytest tests
 ```
