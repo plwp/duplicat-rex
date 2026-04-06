@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.env
+*.env
+
+# Distribution / packaging
+pip-wheel-metadata/
+*.whl
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Node
+node_modules/
+.npm/
+
+# Editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Secrets
+*.pem
+*.key
+secrets/
+
+# Chief-wiggum tmp
+~/.chief-wiggum/tmp/
