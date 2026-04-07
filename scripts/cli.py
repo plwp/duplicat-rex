@@ -2,6 +2,7 @@
 
 import asyncio
 import getpass
+from pathlib import Path
 
 import typer
 
@@ -197,11 +198,10 @@ def duplicate(
         True, "--use-multi-ai/--no-multi-ai", help="Use multi-AI synthesis"
     ),
     cw_home: str = typer.Option(
-        "/Users/patwork/.chief-wiggum", "--cw-home", help="Path to chief-wiggum home"
+        str(Path.home() / ".chief-wiggum"), "--cw-home", help="Path to chief-wiggum home"
     ),
 ) -> None:
     """Full pipeline: recon → spec → build → compare → loop."""
-    from pathlib import Path
 
     config = DuplicateConfig(
         target_url=target,
@@ -237,16 +237,18 @@ def compare(
     ),
 ) -> None:
     """Compare clone against target for behavioral conformance."""
-    from pathlib import Path
 
     target_url = _normalise_url(target)
     clone_url = _normalise_url(clone_url)
 
     async def _run() -> float:
-        parsed = parse_scope(scope, target=target) if scope else None
-        if parsed is not None and not parsed.frozen:
-            freeze_scope(parsed)
-        models_scope = _bridge_scope(parsed, target)
+        # Only filter by scope if explicitly provided
+        models_scope = None
+        if scope:
+            parsed = parse_scope(scope, target=target)
+            if not parsed.frozen:
+                freeze_scope(parsed)
+            models_scope = _bridge_scope(parsed, target)
 
         comparator = BehavioralComparator(Path(suite_dir))
         result = await comparator.compare(target_url, clone_url, scope=models_scope)
@@ -273,7 +275,6 @@ def converge(
     ),
 ) -> None:
     """Run gap analysis and feed back into build pipeline."""
-    from pathlib import Path
 
     target_url = _normalise_url(target)
     clone_url = _normalise_url(clone_url)
@@ -308,10 +309,11 @@ def converge(
 
         report = await orchestrator.run(config)
         typer.echo(report.format_summary())
-        return report.stop_reason
+        return report
 
-    stop_reason = asyncio.run(_run())
-    if stop_reason != "parity_achieved":
+    report = asyncio.run(_run())
+    # Exit 0 if parity achieved or final parity meets target
+    if report.stop_reason != "parity_achieved" and report.final_parity < target_parity:
         raise typer.Exit(code=1)
 
 

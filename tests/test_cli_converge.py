@@ -21,10 +21,13 @@ from scripts.converge import ConvergenceReport, IterationResult
 # ---------------------------------------------------------------------------
 
 
-def make_convergence_report(stop_reason: str = "parity_achieved") -> ConvergenceReport:
+def make_convergence_report(
+    stop_reason: str = "parity_achieved",
+    final_parity: float = 95.0,
+) -> ConvergenceReport:
     it1 = IterationResult(
         iteration=1,
-        parity_score=95.0,
+        parity_score=final_parity,
         gaps_found=0,
         gaps_fixed=0,
         new_issues_created=0,
@@ -33,7 +36,7 @@ def make_convergence_report(stop_reason: str = "parity_achieved") -> Convergence
     )
     return ConvergenceReport(
         iterations=[it1],
-        final_parity=95.0,
+        final_parity=final_parity,
         stop_reason=stop_reason,
         total_cost=0.001,
         duration_seconds=3.0,
@@ -135,10 +138,10 @@ def test_converge_prints_summary(tmp_path: Path) -> None:
 
 
 def test_converge_exits_1_on_non_parity_stop(tmp_path: Path) -> None:
-    """converge CLI exits with code 1 when stop_reason is not 'parity_achieved'."""
+    """converge CLI exits with code 1 when parity below target and not achieved."""
     from scripts.cli import app
 
-    report = make_convergence_report(stop_reason="max_iterations")
+    report = make_convergence_report(stop_reason="max_iterations", final_parity=50.0)
     mock_orchestrator_instance = MagicMock()
     mock_orchestrator_instance.run = AsyncMock(return_value=report)
 
