@@ -158,6 +158,7 @@ def test_report_format_summary_includes_key_fields():
         recon_facts=42,
         specs_generated=7,
         tests_generated=15,
+        issues_created=5,
         convergence=None,
         total_duration_seconds=30.5,
         total_cost=0.05,
@@ -168,6 +169,7 @@ def test_report_format_summary_includes_key_fields():
     assert "42" in summary
     assert "7" in summary
     assert "15" in summary
+    assert "5" in summary
     assert "30.5" in summary
     assert "0.0500" in summary
     assert "Convergence: not run" in summary
@@ -183,6 +185,7 @@ def test_report_format_summary_with_convergence():
         recon_facts=10,
         specs_generated=3,
         tests_generated=5,
+        issues_created=2,
         convergence=conv,
         total_duration_seconds=60.0,
         total_cost=0.01,
@@ -201,6 +204,7 @@ def test_report_format_summary_shows_errors():
         recon_facts=0,
         specs_generated=0,
         tests_generated=0,
+        issues_created=0,
         convergence=None,
         total_duration_seconds=5.0,
         total_cost=0.0,
@@ -313,6 +317,9 @@ def test_run_calls_all_steps_in_order(tmp_path):
         call_order.append("resolve_repo")
         return tmp_path
 
+    def _scaffold(*a, **kw):
+        call_order.append("scaffold")
+
     async def _recon(*a, **kw):
         call_order.append("recon")
         return 5
@@ -324,6 +331,10 @@ def test_run_calls_all_steps_in_order(tmp_path):
     def _snap(*a, **kw):
         call_order.append("snapshot")
         return "2026-01-01T00:00:00"
+
+    def _issues(*a, **kw):
+        call_order.append("issues")
+        return 3
 
     def _gen(*a, **kw):
         call_order.append("gen_tests")
@@ -338,9 +349,11 @@ def test_run_calls_all_steps_in_order(tmp_path):
 
     with (
         patch.object(pipeline, "_resolve_or_create_repo", side_effect=_resolve),
+        patch.object(pipeline, "_scaffold_repo", side_effect=_scaffold),
         patch.object(pipeline, "_run_recon", side_effect=_recon),
         patch.object(pipeline, "_synthesize_specs", side_effect=_synth),
         patch.object(pipeline, "_snapshot_and_commit_specs", side_effect=_snap),
+        patch.object(pipeline, "_generate_github_issues", side_effect=_issues),
         patch.object(pipeline, "_generate_tests", side_effect=_gen),
         patch.object(pipeline, "_commit_tests", side_effect=_commit),
         patch.object(pipeline, "_run_convergence", side_effect=_conv),
@@ -349,15 +362,18 @@ def test_run_calls_all_steps_in_order(tmp_path):
 
     assert call_order == [
         "resolve_repo",
+        "scaffold",
         "recon",
         "synthesize",
         "snapshot",
+        "issues",
         "gen_tests",
         "commit_tests",
         "convergence",
     ]
     assert report.recon_facts == 5
     assert report.specs_generated == 2
+    assert report.issues_created == 3
     assert report.tests_generated == 10
     assert report.convergence is mock_conv
 
@@ -378,9 +394,11 @@ def test_recon_failure_recorded_in_errors(tmp_path):
 
     with (
         patch.object(pipeline, "_resolve_or_create_repo", return_value=None),
+        patch.object(pipeline, "_scaffold_repo", return_value=None),
         patch.object(pipeline, "_run_recon", new=AsyncMock(return_value=0)),
         patch.object(pipeline, "_synthesize_specs", new=AsyncMock(return_value=None)),
         patch.object(pipeline, "_snapshot_and_commit_specs", return_value=""),
+        patch.object(pipeline, "_generate_github_issues", return_value=0),
         patch.object(pipeline, "_generate_tests", return_value=0),
         patch.object(pipeline, "_commit_tests", return_value=None),
         patch.object(pipeline, "_run_convergence", new=AsyncMock(return_value=None)),
@@ -399,9 +417,11 @@ def test_synthesis_failure_produces_zero_specs(tmp_path):
 
     with (
         patch.object(pipeline, "_resolve_or_create_repo", return_value=None),
+        patch.object(pipeline, "_scaffold_repo", return_value=None),
         patch.object(pipeline, "_run_recon", new=AsyncMock(return_value=3)),
         patch.object(pipeline, "_synthesize_specs", new=AsyncMock(return_value=None)),
         patch.object(pipeline, "_snapshot_and_commit_specs", return_value=""),
+        patch.object(pipeline, "_generate_github_issues", return_value=0),
         patch.object(pipeline, "_generate_tests", return_value=0),
         patch.object(pipeline, "_commit_tests", return_value=None),
         patch.object(pipeline, "_run_convergence", new=AsyncMock(return_value=None)),
@@ -423,9 +443,11 @@ def test_convergence_failure_returns_none_convergence(tmp_path):
 
     with (
         patch.object(pipeline, "_resolve_or_create_repo", return_value=None),
+        patch.object(pipeline, "_scaffold_repo", return_value=None),
         patch.object(pipeline, "_run_recon", new=AsyncMock(return_value=2)),
         patch.object(pipeline, "_synthesize_specs", new=AsyncMock(return_value=mock_bundle)),
         patch.object(pipeline, "_snapshot_and_commit_specs", return_value="2026-01-01"),
+        patch.object(pipeline, "_generate_github_issues", return_value=0),
         patch.object(pipeline, "_generate_tests", return_value=5),
         patch.object(pipeline, "_commit_tests", return_value=None),
         patch.object(pipeline, "_run_convergence", new=AsyncMock(return_value=None)),
@@ -490,10 +512,12 @@ def test_report_fields_populated_from_pipeline(tmp_path):
     mock_conv = make_convergence_report(parity=75.0)
 
     with (
-        patch.object(pipeline, "_resolve_or_create_repo", return_value=None),
+        patch.object(pipeline, "_resolve_or_create_repo", return_value=tmp_path),
+        patch.object(pipeline, "_scaffold_repo", return_value=None),
         patch.object(pipeline, "_run_recon", new=AsyncMock(return_value=20)),
         patch.object(pipeline, "_synthesize_specs", new=AsyncMock(return_value=mock_bundle)),
         patch.object(pipeline, "_snapshot_and_commit_specs", return_value="2026-01-01T12:00:00"),
+        patch.object(pipeline, "_generate_github_issues", return_value=4),
         patch.object(pipeline, "_generate_tests", return_value=12),
         patch.object(pipeline, "_commit_tests", return_value=None),
         patch.object(pipeline, "_run_convergence", new=AsyncMock(return_value=mock_conv)),
@@ -504,6 +528,7 @@ def test_report_fields_populated_from_pipeline(tmp_path):
     assert report.output_repo == "plwp/abuello"
     assert report.recon_facts == 20
     assert report.specs_generated == 4
+    assert report.issues_created == 4
     assert report.tests_generated == 12
     assert report.bundle_id == "bundle-abc"
     assert report.snapshot_at == "2026-01-01T12:00:00"
@@ -519,9 +544,11 @@ def test_report_scope_contains_parsed_features(tmp_path):
 
     with (
         patch.object(pipeline, "_resolve_or_create_repo", return_value=None),
+        patch.object(pipeline, "_scaffold_repo", return_value=None),
         patch.object(pipeline, "_run_recon", new=AsyncMock(return_value=0)),
         patch.object(pipeline, "_synthesize_specs", new=AsyncMock(return_value=None)),
         patch.object(pipeline, "_snapshot_and_commit_specs", return_value=""),
+        patch.object(pipeline, "_generate_github_issues", return_value=0),
         patch.object(pipeline, "_generate_tests", return_value=0),
         patch.object(pipeline, "_commit_tests", return_value=None),
         patch.object(pipeline, "_run_convergence", new=AsyncMock(return_value=None)),
@@ -532,3 +559,263 @@ def test_report_scope_contains_parsed_features(tmp_path):
     assert "boards" in feature_names
     assert "lists" in feature_names
     assert "cards" in feature_names
+
+
+# ---------------------------------------------------------------------------
+# Scaffolding and Issue Generation
+# ---------------------------------------------------------------------------
+
+
+def test_scaffold_repo(tmp_path):
+    """_scaffold_repo copies templates and replaces placeholders."""
+    pipeline = make_pipeline(tmp_path)
+    repo_path = tmp_path / "output-repo"
+    repo_path.mkdir()
+
+    errors: list[str] = []
+
+    with (
+        patch("scripts.duplicate.Path") as MockPath,
+        patch.object(pipeline, "_git_commit") as mock_commit,
+    ):
+        # Setup mocks to simulate finding a template file
+        # Path(__file__).parent.parent / "templates" / "scaffold"
+        mock_template_dir = MagicMock()
+        mock_template_dir.exists.return_value = True
+        
+        # This mocks the chain: Path(__file__).parent.parent / "templates" / "scaffold"
+        # Each / call is a __truediv__ call returning a new Path mock.
+        mock_parent = MockPath.return_value.parent.parent
+        mock_templates = mock_parent.__truediv__.return_value
+        mock_templates.__truediv__.return_value = mock_template_dir
+        
+        mock_file = MagicMock()
+        mock_file.is_dir.return_value = False
+        mock_file.relative_to.return_value = Path("package.json")
+        mock_file.read_text.return_value = '{"name": "{{REPO_NAME_SLUG}}", "full": "{{REPO_NAME}}"}'
+        
+        mock_template_dir.rglob.return_value = [mock_file]
+
+        pipeline._scaffold_repo(repo_path, "plwp/my-awesome-repo", errors)
+
+    # Verify file was written to the real repo_path
+    pkg_json = repo_path / "package.json"
+    assert pkg_json.exists()
+    content = pkg_json.read_text()
+    assert "my-awesome-repo" in content
+    assert "plwp/my-awesome-repo" in content
+
+    mock_commit.assert_called_once()
+    assert "chore: scaffold repo" in mock_commit.call_args.kwargs["message"]
+
+
+def test_generate_github_issues(tmp_path):
+    """_generate_github_issues calls gh CLI once per feature (not per spec item)."""
+    pipeline = make_pipeline(tmp_path)
+    from scripts.models import SpecBundle, SpecItem
+
+    bundle = SpecBundle(
+        target="trello.com",
+        scope=["boards"],
+        spec_items=[
+            SpecItem(feature="boards", spec_type="model", content={"schema": {}}),
+            SpecItem(feature="boards", spec_type="api", content={"endpoints": []}),
+        ],
+    )
+
+    errors: list[str] = []
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="https://github.com/plwp/clone/issues/1")
+        count = pipeline._generate_github_issues(tmp_path, bundle, errors)
+
+    # Two spec items both under "boards" → 1 issue, not 2
+    assert count == 1
+    assert mock_run.call_count == 1
+    # Verify the call args
+    args = mock_run.call_args_list[0][0][0]
+    assert "gh" in args
+    assert "issue" in args
+    assert "create" in args
+    assert "--title" in args
+    assert "[SPEC] Implement boards" in args
+
+
+# ---------------------------------------------------------------------------
+# New tests for scaffold idempotency and improved issue generation
+# ---------------------------------------------------------------------------
+
+
+def test_scaffold_skips_existing_files(tmp_path):
+    """Scaffold doesn't overwrite files that already exist with different content."""
+    pipeline = make_pipeline(tmp_path)
+    repo_path = tmp_path / "output-repo"
+    repo_path.mkdir()
+
+    # Pre-create a file with user-modified content
+    pkg_json = repo_path / "package.json"
+    pkg_json.write_text("user-modified content")
+
+    errors: list[str] = []
+
+    with (
+        patch("scripts.duplicate.Path") as MockPath,
+        patch.object(pipeline, "_git_commit"),
+    ):
+        mock_template_dir = MagicMock()
+        mock_template_dir.exists.return_value = True
+
+        mock_parent = MockPath.return_value.parent.parent
+        mock_templates = mock_parent.__truediv__.return_value
+        mock_templates.__truediv__.return_value = mock_template_dir
+
+        mock_file = MagicMock()
+        mock_file.is_dir.return_value = False
+        mock_file.relative_to.return_value = Path("package.json")
+        mock_file.read_text.return_value = '{"name": "{{REPO_NAME_SLUG}}", "full": "{{REPO_NAME}}"}'
+
+        mock_template_dir.rglob.return_value = [mock_file]
+
+        pipeline._scaffold_repo(repo_path, "plwp/my-repo", errors)
+
+    # File should still have user-modified content (not overwritten)
+    assert pkg_json.read_text() == "user-modified content"
+
+
+def test_scaffold_skips_existing_identical_files(tmp_path):
+    """Scaffold skips files that exist with the same content (no redundant write)."""
+    pipeline = make_pipeline(tmp_path)
+    repo_path = tmp_path / "output-repo"
+    repo_path.mkdir()
+
+    # Pre-create a file with exactly the rendered content
+    pkg_json = repo_path / "package.json"
+    rendered = '{"name": "my-repo", "full": "plwp/my-repo"}'
+    pkg_json.write_text(rendered)
+
+    errors: list[str] = []
+
+    with (
+        patch("scripts.duplicate.Path") as MockPath,
+        patch.object(pipeline, "_git_commit"),
+    ):
+        mock_template_dir = MagicMock()
+        mock_template_dir.exists.return_value = True
+
+        mock_parent = MockPath.return_value.parent.parent
+        mock_templates = mock_parent.__truediv__.return_value
+        mock_templates.__truediv__.return_value = mock_template_dir
+
+        mock_file = MagicMock()
+        mock_file.is_dir.return_value = False
+        mock_file.relative_to.return_value = Path("package.json")
+        mock_file.read_text.return_value = '{"name": "{{REPO_NAME_SLUG}}", "full": "{{REPO_NAME}}"}'
+
+        mock_template_dir.rglob.return_value = [mock_file]
+
+        pipeline._scaffold_repo(repo_path, "plwp/my-repo", errors)
+
+    # File still unchanged — no error
+    assert pkg_json.read_text() == rendered
+    assert errors == []
+
+
+def test_issue_generation_groups_by_feature(tmp_path):
+    """One issue per feature, not per spec item."""
+    pipeline = make_pipeline(tmp_path)
+    from scripts.models import SpecBundle, SpecItem
+
+    bundle = SpecBundle(
+        target="trello.com",
+        scope=["boards", "lists"],
+        spec_items=[
+            SpecItem(feature="boards", spec_type="model", content={}),
+            SpecItem(feature="boards", spec_type="api", content={}),
+            SpecItem(feature="boards", spec_type="ui", content={}),
+            SpecItem(feature="lists", spec_type="model", content={}),
+            SpecItem(feature="lists", spec_type="api", content={}),
+        ],
+    )
+
+    errors: list[str] = []
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="https://github.com/plwp/clone/issues/1")
+        count = pipeline._generate_github_issues(tmp_path, bundle, errors)
+
+    # 3 boards + 2 lists → 2 issues (one per feature)
+    assert count == 2
+    assert mock_run.call_count == 2
+
+    titles_created = [
+        call[0][0][call[0][0].index("--title") + 1]
+        for call in mock_run.call_args_list
+    ]
+    assert "[SPEC] Implement boards" in titles_created
+    assert "[SPEC] Implement lists" in titles_created
+
+
+def test_issue_generation_writes_manifest(tmp_path):
+    """Manifest file is created with feature→URL mapping."""
+    pipeline = make_pipeline(tmp_path)
+    from scripts.models import SpecBundle, SpecItem
+
+    bundle = SpecBundle(
+        target="trello.com",
+        scope=["boards", "lists"],
+        spec_items=[
+            SpecItem(feature="boards", spec_type="model", content={}),
+            SpecItem(feature="lists", spec_type="model", content={}),
+        ],
+    )
+
+    errors: list[str] = []
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="https://github.com/plwp/clone/issues/1"
+        )
+        pipeline._generate_github_issues(tmp_path, bundle, errors)
+
+    manifest_path = tmp_path / ".duplicat-rex" / "issues-manifest.json"
+    assert manifest_path.exists(), "Manifest file was not created"
+
+    import json
+    manifest = json.loads(manifest_path.read_text())
+    assert "boards" in manifest
+    assert "lists" in manifest
+
+
+def test_issue_generation_skips_manifested(tmp_path):
+    """Features already in the manifest are not re-created."""
+    pipeline = make_pipeline(tmp_path)
+    import json
+
+    from scripts.models import SpecBundle, SpecItem
+
+    # Pre-write manifest with "boards" already done
+    manifest_dir = tmp_path / ".duplicat-rex"
+    manifest_dir.mkdir()
+    (manifest_dir / "issues-manifest.json").write_text(
+        json.dumps({"boards": "https://github.com/plwp/clone/issues/1"}) + "\n"
+    )
+
+    bundle = SpecBundle(
+        target="trello.com",
+        scope=["boards", "lists"],
+        spec_items=[
+            SpecItem(feature="boards", spec_type="model", content={}),
+            SpecItem(feature="lists", spec_type="model", content={}),
+        ],
+    )
+
+    errors: list[str] = []
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="https://github.com/plwp/clone/issues/2"
+        )
+        count = pipeline._generate_github_issues(tmp_path, bundle, errors)
+
+    # Only "lists" should be created (boards was already in manifest)
+    assert count == 1
+    assert mock_run.call_count == 1
+    args = mock_run.call_args_list[0][0][0]
+    assert "[SPEC] Implement lists" in args
+
