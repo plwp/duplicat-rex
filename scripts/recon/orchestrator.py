@@ -151,17 +151,24 @@ class ReconOrchestrator:
     # Credential scoping (INV-029)
     # ------------------------------------------------------------------
 
-    def _fetch_credentials(self, module: ReconModule) -> dict[str, str]:
+    def _fetch_credentials(
+        self, module: ReconModule, target: str = ""
+    ) -> dict[str, str]:
         """
         Fetch only the credentials declared by the module (INV-029).
+        Resolves {domain} placeholders in key names using the target.
         Missing credentials are silently omitted — the module must handle
         auth failures gracefully via ReconResult.errors.
         """
+        # Derive domain slug from target (e.g. "trello.com" → "trello-com")
+        domain_slug = target.replace("https://", "").replace("http://", "").split("/")[0].replace(".", "-")
+
         creds: dict[str, str] = {}
         for key in module.requires_credentials:
-            value = self.keychain.get_secret(key)
+            resolved_key = key.replace("{domain}", domain_slug) if "{domain}" in key else key
+            value = self.keychain.get_secret(resolved_key)
             if value is not None:
-                creds[key] = value
+                creds[resolved_key] = value
         return creds
 
     # ------------------------------------------------------------------
@@ -242,7 +249,7 @@ class ReconOrchestrator:
 
         async def _run_one(mod: ReconModule) -> ReconResult:
             async with semaphore:
-                creds = self._fetch_credentials(mod)
+                creds = self._fetch_credentials(mod, target=target)
                 services = ReconServices(
                     spec_store=self.spec_store,
                     credentials=creds,
