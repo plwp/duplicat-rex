@@ -2,7 +2,6 @@
 
 import asyncio
 import getpass
-from typing import Any
 
 import typer
 
@@ -17,8 +16,10 @@ from scripts.keychain import (
 )
 from scripts.models import DependencyEdge, ScopeNode
 from scripts.models import Scope as ModelsScope
+from scripts.recon.base import ReconProgress
 from scripts.recon.orchestrator import ReconOrchestrator, ReconReport
-from scripts.scope import parse_scope
+from scripts.scope import Scope as ParsedScope
+from scripts.scope import freeze_scope, parse_scope
 from scripts.spec_store import SpecStore
 
 app = typer.Typer(
@@ -32,7 +33,7 @@ app.add_typer(secrets_app, name="secrets")
 
 
 def _bridge_scope(
-    parsed: Any,
+    parsed: ParsedScope | None,
     target: str,
 ) -> ModelsScope:
     """Convert scripts.scope.Scope to scripts.models.Scope."""
@@ -123,11 +124,13 @@ async def _run_recon(
 ) -> int:
     """Run the recon pipeline. Returns exit code (0=success, 1=no facts)."""
     parsed = parse_scope(scope_str, target=target) if scope_str else None
+    if parsed is not None and not parsed.frozen:
+        freeze_scope(parsed)
     models_scope = _bridge_scope(parsed, target)
 
     store = SpecStore(root=store_path)
 
-    def on_progress(progress: Any) -> None:
+    def on_progress(progress: ReconProgress) -> None:
         typer.echo(f"  [{progress.module}] {progress.message}")
 
     orchestrator = ReconOrchestrator(
@@ -158,6 +161,9 @@ def recon(
     max_concurrent: int = typer.Option(3, "--max-concurrent", help="Max parallel modules"),
 ) -> None:
     """Gather intelligence from all available sources for a target SaaS."""
+    if max_concurrent < 1:
+        typer.echo("Error: --max-concurrent must be >= 1", err=True)
+        raise typer.Exit(code=2)
     exit_code = asyncio.run(_run_recon(target, scope, store, modules, max_concurrent))
     if exit_code != 0:
         raise typer.Exit(code=exit_code)

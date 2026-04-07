@@ -247,3 +247,63 @@ def test_recon_exits_1_on_zero_facts(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}"
+
+
+# ---------------------------------------------------------------------------
+# Test 7: recon CLI rejects invalid max_concurrent
+# ---------------------------------------------------------------------------
+
+
+def test_recon_rejects_zero_max_concurrent(tmp_path: Path) -> None:
+    """--max-concurrent 0 exits with code 2 (not deadlock)."""
+    from scripts.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["recon", "trello.com", "--max-concurrent", "0", "--store", str(tmp_path)],
+    )
+    assert result.exit_code == 2
+
+
+def test_recon_rejects_negative_max_concurrent(tmp_path: Path) -> None:
+    """--max-concurrent -1 exits with code 2."""
+    from scripts.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["recon", "trello.com", "--max-concurrent", "-1", "--store", str(tmp_path)],
+    )
+    assert result.exit_code == 2
+
+
+# ---------------------------------------------------------------------------
+# Test 9: scope is frozen before passing to orchestrator
+# ---------------------------------------------------------------------------
+
+
+def test_recon_scope_is_frozen(tmp_path: Path) -> None:
+    """Scope passed to orchestrator has frozen=True and a scope_hash."""
+    from scripts.cli import app
+
+    report = make_recon_report()
+    mock_orchestrator_instance = MagicMock()
+    mock_orchestrator_instance.run = AsyncMock(return_value=report)
+
+    runner = CliRunner()
+
+    with (
+        patch("scripts.cli.ReconOrchestrator", return_value=mock_orchestrator_instance),
+        patch("scripts.cli.SpecStore"),
+    ):
+        result = runner.invoke(
+            app,
+            ["recon", "trello.com", "--scope", "boards,lists", "--store", str(tmp_path)],
+        )
+
+    assert result.exit_code == 0
+    call_kwargs = mock_orchestrator_instance.run.call_args
+    scope_arg = call_kwargs.kwargs.get("scope") or call_kwargs.args[1]
+    assert scope_arg.frozen is True
+    assert scope_arg.scope_hash != ""
