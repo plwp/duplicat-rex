@@ -221,6 +221,14 @@ class DuplicatePipeline:
             issues_created = self._generate_github_issues(
                 output_repo_path, bundle, errors
             )
+            # Commit the issues manifest so dedup survives across runs
+            if issues_created > 0:
+                self._git_commit(
+                    output_repo_path,
+                    message="chore: update issues manifest [duplicat-rex]",
+                    paths=[".duplicat-rex"],
+                    errors=errors,
+                )
 
         # --- Step 7: Generate tests ---
         logger.info("[7/9] Generating conformance tests")
@@ -337,6 +345,7 @@ class DuplicatePipeline:
                 return
 
             repo_slug = repo_name.split("/")[-1].lower().replace(" ", "-")
+            files_written = 0
 
             for template_file in template_dir.rglob("*"):
                 if template_file.is_dir():
@@ -345,32 +354,34 @@ class DuplicatePipeline:
                 # Calculate relative path
                 rel_path = template_file.relative_to(template_dir)
                 target_path = repo_path / rel_path
-                target_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # Read and substitute variables
-                content = template_file.read_text()
-                content = content.replace("{{REPO_NAME}}", repo_name)
-                content = content.replace("{{REPO_NAME_SLUG}}", repo_slug)
-
-                # Idempotency: skip files that already exist with different content
+                # Idempotency: skip files that already exist
                 if target_path.exists():
-                    existing = target_path.read_text()
-                    if existing != content:
-                        logger.info(
-                            "Skipping %s (already exists with different content)", rel_path
-                        )
-                    # Either different (skipped above) or same (no need to write)
+                    logger.info("Skipping %s (already exists)", rel_path)
                     continue
 
-                target_path.write_text(content)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Commit scaffold
-            self._git_commit(
-                repo_path,
-                message="chore: scaffold repo with default stack [duplicat-rex]",
-                paths=["."],
-                errors=errors,
-            )
+                # Handle binary vs text files
+                try:
+                    content = template_file.read_text()
+                    content = content.replace("{{REPO_NAME}}", repo_name)
+                    content = content.replace("{{REPO_NAME_SLUG}}", repo_slug)
+                    target_path.write_text(content)
+                except UnicodeDecodeError:
+                    # Binary file — copy without substitution
+                    target_path.write_bytes(template_file.read_bytes())
+
+                files_written += 1
+
+            # Only commit if files were actually written
+            if files_written > 0:
+                self._git_commit(
+                    repo_path,
+                    message="chore: scaffold repo with default stack [duplicat-rex]",
+                    paths=["."],
+                    errors=errors,
+                )
         except Exception as exc:  # noqa: BLE001
             msg = f"Scaffolding failed: {exc}"
             logger.error(msg, exc_info=True)
@@ -393,7 +404,11 @@ class DuplicatePipeline:
             manifest_path = manifest_dir / "issues-manifest.json"
             manifest: dict[str, str] = {}
             if manifest_path.exists():
-                manifest = json.loads(manifest_path.read_text())
+                try:
+                    manifest = json.loads(manifest_path.read_text())
+                except (json.JSONDecodeError, OSError):
+                    logger.warning("Corrupt manifest at %s, starting fresh", manifest_path)
+                    manifest = {}
 
             for feature, items in sorted(by_feature.items()):
                 if feature in manifest:
@@ -450,9 +465,15 @@ class DuplicatePipeline:
                 ]:
                     if key in content and content[key]:
                         sections.append(f"#### {key.replace('_', ' ').title()}")
+                        json_str = json.dumps(content[key], indent=2)
                         sections.append("```json")
-                        sections.append(json.dumps(content[key], indent=2)[:3000])
-                        sections.append("```")
+                        if len(json_str) > 30000:
+                            sections.append(json_str[:30000])
+                            sections.append("```")
+                            sections.append("*(truncated — see .specstore for full specs)*")
+                        else:
+                            sections.append(json_str)
+                            sections.append("```")
                         sections.append("")
 
                 if "open_questions" in content and content["open_questions"]:

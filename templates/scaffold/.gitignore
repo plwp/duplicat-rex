@@ -20,5 +20,5 @@ build/
 *.pem
 npm-debug.log*
 
-# duplicat-rex
-.specstore/
+# duplicat-rex artifacts are committed intentionally
+# .specstore/ — DO NOT ignore, specs must be versioned
