@@ -19,6 +19,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import time
@@ -72,6 +73,7 @@ class DuplicateReport:
     recon_facts: int
     specs_generated: int
     tests_generated: int
+    issues_created: int
     convergence: ConvergenceReport | None
     total_duration_seconds: float
     total_cost: float
@@ -90,6 +92,7 @@ class DuplicateReport:
         lines.append(f"Scope:           {', '.join(self.scope.feature_names())}")
         lines.append(f"Recon facts:     {self.recon_facts}")
         lines.append(f"Specs generated: {self.specs_generated}")
+        lines.append(f"Issues created:  {self.issues_created}")
         lines.append(f"Tests generated: {self.tests_generated}")
         lines.append(f"Total duration:  {self.total_duration_seconds:.1f}s")
         lines.append(f"Total cost:      ${self.total_cost:.4f}")
@@ -152,13 +155,15 @@ class DuplicatePipeline:
         """
         Execute the full pipeline:
           1. Parse scope, create output repo if needed
-          2. Run recon orchestrator against target_url
-          3. Synthesize specs from gathered facts
-          4. Snapshot specs and commit to output repo
-          5. Generate dual-execution test cases
-          6. Commit tests to output repo
-          7. Run convergence loop
-          8. Report final parity score, cost, duration
+          2. Scaffold output repo (Next.js, Tailwind, Docker, etc.)
+          3. Run recon orchestrator against target_url
+          4. Synthesize specs from gathered facts
+          5. Snapshot specs and commit to output repo
+          6. Generate GitHub issues for implementation
+          7. Generate dual-execution test cases
+          8. Commit tests to output repo
+          9. Run convergence loop
+          10. Report final parity score, cost, duration
 
         REQUIRES: config.target_url and config.output_repo are non-empty.
         ENSURES: returned DuplicateReport is always produced (errors captured in report.errors).
@@ -174,28 +179,33 @@ class DuplicatePipeline:
         errors: list[str] = []
 
         # --- Step 1: Parse scope + create output repo ---
-        logger.info("[1/7] Parsing scope: %s", config.scope_str)
+        logger.info("[1/9] Parsing scope: %s", config.scope_str)
         normalised = _normalise_url(config.target_url)
         target_host = normalised.replace("https://", "").replace("http://", "").split("/")[0]
         scope = parse_scope(config.scope_str, target=target_host)
 
         output_repo_path = self._resolve_or_create_repo(config.output_repo, errors)
 
-        # --- Step 2: Recon ---
-        logger.info("[2/7] Running recon against %s", config.target_url)
+        # --- Step 2: Scaffold repo ---
+        logger.info("[2/9] Scaffolding output repo: %s", config.output_repo)
+        if output_repo_path:
+            self._scaffold_repo(output_repo_path, config.output_repo, errors)
+
+        # --- Step 3: Recon ---
+        logger.info("[3/9] Running recon against %s", config.target_url)
         spec_store = SpecStore(output_repo_path or self.work_dir)
         recon_facts = await self._run_recon(
             config, scope, spec_store, errors
         )
 
-        # --- Step 3: Synthesize specs ---
-        logger.info("[3/7] Synthesizing specs (%d facts)", recon_facts)
+        # --- Step 4: Synthesize specs ---
+        logger.info("[4/9] Synthesizing specs (%d facts)", recon_facts)
         bundle = await self._synthesize_specs(
             config, scope, spec_store, errors
         )
 
-        # --- Step 4: Snapshot and commit specs ---
-        logger.info("[4/7] Snapshotting specs")
+        # --- Step 5: Snapshot and commit specs ---
+        logger.info("[5/9] Snapshotting specs")
         snapshot_at = ""
         if bundle is not None:
             snapshot_at = self._snapshot_and_commit_specs(
@@ -204,21 +214,37 @@ class DuplicatePipeline:
 
         specs_generated = len(bundle.spec_items) if bundle else 0
 
-        # --- Step 5: Generate tests ---
-        logger.info("[5/7] Generating conformance tests")
+        # --- Step 6: Generate GitHub issues ---
+        logger.info("[6/9] Generating GitHub issues")
+        issues_created = 0
+        if bundle is not None and output_repo_path:
+            issues_created = self._generate_github_issues(
+                output_repo_path, bundle, errors
+            )
+            # Commit the issues manifest so dedup survives across runs
+            if issues_created > 0:
+                self._git_commit(
+                    output_repo_path,
+                    message="chore: update issues manifest [duplicat-rex]",
+                    paths=[".duplicat-rex"],
+                    errors=errors,
+                )
+
+        # --- Step 7: Generate tests ---
+        logger.info("[7/9] Generating conformance tests")
         tests_generated = 0
         if bundle is not None:
             tests_generated = self._generate_tests(
                 bundle, config, output_repo_path or self.work_dir, errors
             )
 
-        # --- Step 6: Commit tests ---
-        logger.info("[6/7] Committing tests to output repo")
+        # --- Step 8: Commit tests ---
+        logger.info("[8/9] Committing tests to output repo")
         if output_repo_path:
             self._commit_tests(output_repo_path, errors)
 
-        # --- Step 7: Convergence loop ---
-        logger.info("[7/7] Running convergence loop")
+        # --- Step 9: Convergence loop ---
+        logger.info("[9/9] Running convergence loop")
         convergence_report = await self._run_convergence(
             config, scope, spec_store, output_repo_path or self.work_dir, errors
         )
@@ -234,6 +260,7 @@ class DuplicatePipeline:
             recon_facts=recon_facts,
             specs_generated=specs_generated,
             tests_generated=tests_generated,
+            issues_created=issues_created,
             convergence=convergence_report,
             total_duration_seconds=duration,
             total_cost=total_cost,
@@ -306,6 +333,161 @@ class DuplicatePipeline:
             capture_output=True, text=True, timeout=60, check=True,
         )
         logger.info("Created GitHub repo: %s", output_repo)
+
+    def _scaffold_repo(self, repo_path: Path, repo_name: str, errors: list[str]) -> None:
+        """
+        Copy templates from templates/scaffold/ to repo_path with variable replacement.
+        """
+        try:
+            template_dir = Path(__file__).parent.parent / "templates" / "scaffold"
+            if not template_dir.exists():
+                logger.warning("Scaffold template directory not found: %s", template_dir)
+                return
+
+            repo_slug = repo_name.split("/")[-1].lower().replace(" ", "-")
+            files_written = 0
+
+            for template_file in template_dir.rglob("*"):
+                if template_file.is_dir():
+                    continue
+
+                # Calculate relative path
+                rel_path = template_file.relative_to(template_dir)
+                target_path = repo_path / rel_path
+
+                # Idempotency: skip files that already exist
+                if target_path.exists():
+                    logger.info("Skipping %s (already exists)", rel_path)
+                    continue
+
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Handle binary vs text files
+                try:
+                    content = template_file.read_text()
+                    content = content.replace("{{REPO_NAME}}", repo_name)
+                    content = content.replace("{{REPO_NAME_SLUG}}", repo_slug)
+                    target_path.write_text(content)
+                except UnicodeDecodeError:
+                    # Binary file — copy without substitution
+                    target_path.write_bytes(template_file.read_bytes())
+
+                files_written += 1
+
+            # Only commit if files were actually written
+            if files_written > 0:
+                self._git_commit(
+                    repo_path,
+                    message="chore: scaffold repo with default stack [duplicat-rex]",
+                    paths=["."],
+                    errors=errors,
+                )
+        except Exception as exc:  # noqa: BLE001
+            msg = f"Scaffolding failed: {exc}"
+            logger.error(msg, exc_info=True)
+            errors.append(msg)
+
+    def _generate_github_issues(
+        self, repo_path: Path, bundle: SpecBundle, errors: list[str]
+    ) -> int:
+        """Generate GitHub issues from spec items, one per feature."""
+        count = 0
+        try:
+            # Group by feature
+            from collections import defaultdict
+            by_feature: dict[str, list] = defaultdict(list)
+            for item in bundle.spec_items:
+                by_feature[item.feature].append(item)
+
+            # Load or create manifest
+            manifest_dir = repo_path / ".duplicat-rex"
+            manifest_path = manifest_dir / "issues-manifest.json"
+            manifest: dict[str, str] = {}
+            if manifest_path.exists():
+                try:
+                    manifest = json.loads(manifest_path.read_text())
+                except (json.JSONDecodeError, OSError):
+                    logger.warning("Corrupt manifest at %s, starting fresh", manifest_path)
+                    manifest = {}
+
+            for feature, items in sorted(by_feature.items()):
+                if feature in manifest:
+                    logger.info("Skipping issue for %s (already in manifest)", feature)
+                    continue
+
+                title = f"[SPEC] Implement {feature}"
+                body = self._render_issue_body(feature, items)
+
+                result = subprocess.run(
+                    ["gh", "issue", "create", "--title", title, "--body", body],
+                    cwd=str(repo_path),
+                    capture_output=True, text=True, timeout=30, check=False,
+                )
+                if result.returncode == 0:
+                    # Extract URL from output
+                    url = result.stdout.strip()
+                    manifest[feature] = url
+                    count += 1
+                else:
+                    errors.append(f"Failed to create issue for {feature}: {result.stderr}")
+
+            # Write manifest
+            manifest_dir.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+        except Exception as exc:  # noqa: BLE001
+            msg = f"GitHub issue generation failed: {exc}"
+            logger.error(msg, exc_info=True)
+            errors.append(msg)
+        return count
+
+    def _render_issue_body(self, feature: str, items: list) -> str:
+        """Render a GitHub issue body from spec items for a feature."""
+        sections = []
+        sections.append(f"## Feature: {feature}")
+        sections.append("")
+
+        for item in items:
+            sections.append(f"### {item.spec_type}")
+            sections.append(f"**Confidence:** {item.confidence}")
+            sections.append("")
+
+            content = item.content
+            if isinstance(content, dict):
+                # Extract key sections
+                if "summary" in content:
+                    sections.append(f"**Summary:** {content['summary']}")
+                    sections.append("")
+
+                for key in [
+                    "api_contracts", "ui_patterns", "data_models",
+                    "state_machines", "business_rules",
+                ]:
+                    if key in content and content[key]:
+                        sections.append(f"#### {key.replace('_', ' ').title()}")
+                        json_str = json.dumps(content[key], indent=2)
+                        sections.append("```json")
+                        if len(json_str) > 30000:
+                            sections.append(json_str[:30000])
+                            sections.append("```")
+                            sections.append("*(truncated — see .specstore for full specs)*")
+                        else:
+                            sections.append(json_str)
+                            sections.append("```")
+                        sections.append("")
+
+                if "open_questions" in content and content["open_questions"]:
+                    sections.append("#### Open Questions")
+                    for q in content["open_questions"]:
+                        sections.append(f"- {q}")
+                    sections.append("")
+            else:
+                sections.append(f"```\n{content}\n```")
+                sections.append("")
+
+        sections.append("---")
+        sections.append("*Generated by duplicat-rex*")
+        return "\n".join(sections)
 
     async def _run_recon(
         self,
