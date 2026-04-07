@@ -11,18 +11,16 @@ Tests cover:
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import typer
 from typer.testing import CliRunner
 
-import scripts.scope as scope_module
-from scripts.models import Scope as ModelsScope, ScopeNode
+from scripts.models import Scope as ModelsScope
 from scripts.recon.orchestrator import ReconReport
-from scripts.scope import Scope as ParsedScope, ScopeFeature
+from scripts.scope import Scope as ParsedScope
+from scripts.scope import ScopeFeature
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -135,7 +133,7 @@ def test_recon_cli_invokes_orchestrator(tmp_path: Path) -> None:
     runner = CliRunner()
 
     with (
-        patch("scripts.cli.ReconOrchestrator", return_value=mock_orchestrator_instance) as mock_cls,
+        patch("scripts.cli.ReconOrchestrator", return_value=mock_orchestrator_instance),
         patch("scripts.cli.SpecStore"),
     ):
         result = runner.invoke(
