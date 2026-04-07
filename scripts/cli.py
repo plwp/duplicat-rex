@@ -340,10 +340,12 @@ def secrets_list(
 @secrets_app.command("set")
 def secrets_set(
     name: str = typer.Argument(..., help="Secret key name"),
+    value: str = typer.Option("", "--value", help="Secret value (alternative to interactive prompt)"),  # noqa: E501
     service: str = typer.Option(DEFAULT_SERVICE, "--service", help="Keyring service namespace"),
 ) -> None:
     """Store a secret in the system keyring (prompts for value securely)."""
-    value = getpass.getpass(f"Enter value for {name}: ")
+    if not value:
+        value = getpass.getpass(f"Enter value for {name}: ")
     if not value:
         typer.echo("Error: empty value", err=True)
         raise typer.Exit(1)

@@ -198,6 +198,10 @@ class DuplicatePipeline:
             config, scope, spec_store, errors
         )
 
+        # --- Step 3b: Copy screenshots to output repo ---
+        if output_repo_path:
+            self._copy_screenshots(spec_store, output_repo_path, errors)
+
         # --- Step 4: Synthesize specs ---
         logger.info("[4/9] Synthesizing specs (%d facts)", recon_facts)
         bundle = await self._synthesize_specs(
@@ -546,6 +550,64 @@ class DuplicatePipeline:
             logger.error(msg, exc_info=True)
             errors.append(msg)
             return 0
+
+    def _copy_screenshots(
+        self,
+        spec_store: SpecStore,
+        output_repo_path: Path,
+        errors: list[str],
+    ) -> None:
+        """
+        Copy screenshots from the spec store artifacts directory to
+        output_repo_path/docs/screenshots/ and git-commit them.
+
+        No-ops silently if the artifacts directory has no .png files.
+        """
+        import shutil
+
+        try:
+            artifacts_dir = spec_store.root / ".specstore" / "artifacts"
+            if not artifacts_dir.exists():
+                logger.debug(  # noqa: E501
+                    "No artifacts directory found at %s — skipping screenshot copy",
+                    artifacts_dir,
+                )
+                return
+
+            png_files = list(artifacts_dir.glob("*.png"))
+            if not png_files:
+                logger.debug("No screenshots found in %s", artifacts_dir)
+                return
+
+            dest_dir = output_repo_path / "docs" / "screenshots"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+
+            copied = 0
+            for src in png_files:
+                dest = dest_dir / src.name
+                # Handle name collisions
+                if dest.exists():
+                    stem = src.stem
+                    suffix = src.suffix
+                    counter = 2
+                    while (dest_dir / f"{stem}_{counter}{suffix}").exists():
+                        counter += 1
+                    dest = dest_dir / f"{stem}_{counter}{suffix}"
+                shutil.copy2(src, dest)
+                copied += 1
+
+            if copied > 0:
+                logger.info("Copied %d screenshot(s) to %s", copied, dest_dir)
+                self._git_commit(
+                    output_repo_path,
+                    message="docs: add recon screenshots [duplicat-rex]",
+                    paths=["docs/screenshots"],
+                    errors=errors,
+                )
+        except Exception as exc:  # noqa: BLE001
+            msg = f"Screenshot copy failed: {exc}"
+            logger.error(msg, exc_info=True)
+            errors.append(msg)
 
     async def _synthesize_specs(
         self,

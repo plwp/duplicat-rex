@@ -540,8 +540,18 @@ class BrowserExploreModule(ReconModule):
             # Take screenshot
             screenshot_path: str | None = None
             if screenshot_dir:
-                safe_name = hashlib.md5(url.encode()).hexdigest()[:12]  # noqa: S324
-                screenshot_path = str(screenshot_dir / f"{safe_name}.png")
+                step_url = url
+                parsed_url = urlparse(step_url)
+                path_slug = parsed_url.path.strip("/").replace("/", "_")[:50] or "home"
+                safe_name = f"{parsed_url.hostname}_{path_slug}".replace(".", "-")
+                # Handle duplicate filenames by appending _2, _3, etc.
+                candidate = screenshot_dir / f"{safe_name}.png"
+                if candidate.exists():
+                    counter = 2
+                    while (screenshot_dir / f"{safe_name}_{counter}.png").exists():
+                        counter += 1
+                    candidate = screenshot_dir / f"{safe_name}_{counter}.png"
+                screenshot_path = str(candidate)
                 try:
                     await page.screenshot(path=screenshot_path, full_page=True)
                 except Exception:  # noqa: BLE001
