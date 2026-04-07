@@ -14,6 +14,7 @@ Invariant compliance:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -185,10 +186,23 @@ class BrowserExploreModule(ReconModule):
                 browser, launched_locally = await self._launch_browser()
 
             try:
-                context = await browser.new_context(
-                    record_har_path=None,  # We intercept manually for full control
-                    viewport={"width": 1280, "height": 800},
-                )
+                # Check for saved auth state (e.g. from playwright codegen --save-storage)
+                auth_state_path = request.module_config.get("auth_state_path")
+                if not auth_state_path and services.artifact_store:
+                    # Check common location relative to store
+                    candidate = Path(services.artifact_store).parent.parent / ".auth-state.json"
+                    if candidate.exists():
+                        auth_state_path = str(candidate)
+
+                context_kwargs: dict[str, Any] = {
+                    "record_har_path": None,
+                    "viewport": {"width": 1280, "height": 800},
+                }
+                if auth_state_path and Path(auth_state_path).exists():
+                    context_kwargs["storage_state"] = auth_state_path
+                    emit("auth", f"Loading saved auth state from {Path(auth_state_path).name}")
+
+                context = await browser.new_context(**context_kwargs)
                 page = await context.new_page()
 
                 # Wire up network interception
@@ -196,21 +210,21 @@ class BrowserExploreModule(ReconModule):
                 ws_captures: list[CapturedWsFrame] = []
                 self._attach_network_interceptor(page, http_captures, ws_captures)
 
-                # Phase: auth
-                emit("auth", "Attempting authentication")
-                auth_ok, auth_error = await self._authenticate(
-                    page, request, creds, emit
-                )
-                if not auth_error and not auth_ok:
-                    # No credentials provided — explore anonymously
+                # Phase: auth — skip if we loaded auth state
+                if auth_state_path and Path(auth_state_path).exists():
+                    emit("auth", "Using saved session — skipping login")
                     auth_ok = True
+                else:
+                    emit("auth", "Attempting authentication")
+                    auth_ok, auth_error = await self._authenticate(
+                        page, request, creds, emit
+                    )
+                    if not auth_error and not auth_ok:
+                        auth_ok = True
 
-                if auth_error:
-                    result.errors.append(auth_error)
-                    result.status = ReconModuleStatus.FAILED
-                    result.finished_at = datetime.now(UTC).isoformat()
-                    result.duration_seconds = time.monotonic() - t_start
-                    return result
+                    if auth_error:
+                        result.errors.append(auth_error)
+                        emit("auth", "Auth failed — falling back to anonymous exploration")
 
                 # Phase: discover
                 emit("discover", "Starting application exploration")
@@ -407,24 +421,42 @@ class BrowserExploreModule(ReconModule):
         login_url = f"{base_url}/login"
 
         try:
-            budget = request.budgets.get("time_seconds", 60)
-            timeout_ms = min(budget * 1000, 30_000)
+            timeout_ms = 30_000
 
             await page.goto(login_url, timeout=timeout_ms)
-            await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+            await asyncio.sleep(2)  # let JS render the login form
 
-            # Generic login form heuristic — real deployments may need
-            # target-specific selectors via module_config
+            # Detect Atlassian SSO (two-step: email → continue → password → submit)
+            is_atlassian = "atlassian.com" in page.url
+
             selectors = request.module_config.get("auth_selectors", {})
             default_username_sel = '[type="email"], [name="username"], [name="email"]'
             username_sel = selectors.get("username", default_username_sel)
             password_sel = selectors.get("password", '[type="password"]')
-            submit_sel = selectors.get("submit", '[type="submit"]')
+            submit_sel = selectors.get("submit", '#login-submit, [type="submit"]')
 
-            await page.fill(username_sel, username)
-            await page.fill(password_sel, password)
-            await page.click(submit_sel)
-            await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            if is_atlassian:
+                # Step 1: fill email and click Continue
+                emit("auth", "Detected Atlassian SSO — entering email")
+                await page.fill(username_sel, username)
+                await page.click(submit_sel)
+                await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                await asyncio.sleep(2)
+
+                # Step 2: fill password and submit
+                emit("auth", "Entering password")
+                await page.wait_for_selector(password_sel, timeout=timeout_ms)
+                await page.fill(password_sel, password)
+                await page.click(submit_sel)
+            else:
+                # Generic single-step login
+                await page.fill(username_sel, username)
+                await page.fill(password_sel, password)
+                await page.click(submit_sel)
+
+            await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+            await asyncio.sleep(3)  # wait for redirect after auth
 
             # Check for common auth failure signals
             current_url = page.url

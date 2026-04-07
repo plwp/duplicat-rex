@@ -146,9 +146,13 @@ async def _run_recon(
     def on_progress(progress: ReconProgress) -> None:
         typer.echo(f"  [{progress.module}] {progress.message}")
 
+    artifact_dir = str(Path(store_path) / ".specstore" / "artifacts")
+    Path(artifact_dir).mkdir(parents=True, exist_ok=True)
+
     orchestrator = ReconOrchestrator(
         spec_store=store,
         keychain=keychain_module,
+        artifact_dir=artifact_dir,
         progress_callback=on_progress,
     )
 
