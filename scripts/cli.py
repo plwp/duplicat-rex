@@ -2,10 +2,15 @@
 
 import asyncio
 import getpass
+from pathlib import Path
 
 import typer
 
 import scripts.keychain as keychain_module
+from scripts.compare import BehavioralComparator, format_report
+from scripts.converge import ConvergenceConfig, ConvergenceOrchestrator
+from scripts.duplicate import DuplicateConfig, DuplicatePipeline
+from scripts.gap_analyzer import GapAnalyzer
 from scripts.keychain import (
     DEFAULT_SERVICE,
     KNOWN_KEYS,
@@ -115,6 +120,14 @@ def _print_report(report: ReconReport) -> None:
     typer.echo("")
 
 
+def _normalise_url(url: str) -> str:
+    """Ensure a URL has a scheme (defaults to https://)."""
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    return url
+
+
 async def _run_recon(
     target: str,
     scope_str: str,
@@ -174,27 +187,134 @@ def duplicate(
     target: str = typer.Argument(..., help="Target SaaS URL or domain"),
     output: str = typer.Option(..., "--output", help="Output repo (owner/repo)"),
     scope: str = typer.Option("", "--scope", help="Comma-separated list of features to duplicate"),
+    max_iterations: int = typer.Option(10, "--max-iterations", help="Max convergence iterations"),
+    target_parity: float = typer.Option(
+        95.0, "--target-parity", help="Stop convergence when parity >= this"
+    ),
+    clone_url: str = typer.Option(
+        "http://localhost:3000", "--clone-url", help="URL of the clone under test"
+    ),
+    use_multi_ai: bool = typer.Option(
+        True, "--use-multi-ai/--no-multi-ai", help="Use multi-AI synthesis"
+    ),
+    cw_home: str = typer.Option(
+        str(Path.home() / ".chief-wiggum"), "--cw-home", help="Path to chief-wiggum home"
+    ),
 ) -> None:
     """Full pipeline: recon → spec → build → compare → loop."""
-    typer.echo(f"Duplicate: {target} → {output} (scope: {scope or 'all'})")
+
+    config = DuplicateConfig(
+        target_url=target,
+        output_repo=output,
+        scope_str=scope or "all",
+        max_iterations=max_iterations,
+        target_parity=target_parity,
+        clone_url=clone_url,
+        use_multi_ai=use_multi_ai,
+    )
+
+    pipeline = DuplicatePipeline(cw_home=cw_home, work_dir=Path("."))
+
+    async def _run():
+        report = await pipeline.run(config)
+        typer.echo(report.format_summary())
+        if report.errors:
+            raise typer.Exit(code=1)
+
+    asyncio.run(_run())
 
 
 @app.command()
 def compare(
-    clone: str = typer.Argument(..., help="Clone repo (owner/repo)"),
-    target: str = typer.Option(..., "--target", help="Target SaaS URL or domain"),
+    target: str = typer.Argument(..., help="Target SaaS URL or domain"),
+    clone_url: str = typer.Option(
+        "http://localhost:3000", "--clone-url", help="URL of the clone under test"
+    ),
+    suite_dir: str = typer.Option(".", "--suite-dir", help="Root directory for conformance tests"),
+    scope: str = typer.Option("", "--scope", help="Comma-separated list of features to compare"),
+    min_parity: float = typer.Option(
+        0.0, "--min-parity", help="Exit 1 if parity score falls below this threshold"
+    ),
 ) -> None:
     """Compare clone against target for behavioral conformance."""
-    typer.echo(f"Compare: {clone} vs {target}")
+
+    target_url = _normalise_url(target)
+    clone_url = _normalise_url(clone_url)
+
+    async def _run() -> float:
+        # Only filter by scope if explicitly provided
+        models_scope = None
+        if scope:
+            parsed = parse_scope(scope, target=target)
+            if not parsed.frozen:
+                freeze_scope(parsed)
+            models_scope = _bridge_scope(parsed, target)
+
+        comparator = BehavioralComparator(Path(suite_dir))
+        result = await comparator.compare(target_url, clone_url, scope=models_scope)
+        typer.echo(format_report(result))
+        return result.parity_score
+
+    parity = asyncio.run(_run())
+    if parity < min_parity:
+        raise typer.Exit(code=1)
 
 
 @app.command()
 def converge(
-    clone: str = typer.Argument(..., help="Clone repo (owner/repo)"),
-    target: str = typer.Option(..., "--target", help="Target SaaS URL or domain"),
+    target: str = typer.Argument(..., help="Target SaaS URL or domain"),
+    output: str = typer.Option(..., "--output", help="Output repo (owner/repo)"),
+    clone_url: str = typer.Option(
+        "http://localhost:3000", "--clone-url", help="URL of the clone under test"
+    ),
+    suite_dir: str = typer.Option(".", "--suite-dir", help="Root directory for conformance tests"),
+    scope: str = typer.Option("", "--scope", help="Comma-separated list of features to converge"),
+    max_iterations: int = typer.Option(10, "--max-iterations", help="Max convergence iterations"),
+    target_parity: float = typer.Option(
+        95.0, "--target-parity", help="Stop convergence when parity >= this"
+    ),
 ) -> None:
     """Run gap analysis and feed back into build pipeline."""
-    typer.echo(f"Converge: {clone} → {target}")
+
+    target_url = _normalise_url(target)
+    clone_url = _normalise_url(clone_url)
+
+    async def _run():
+        parsed_scope = parse_scope(scope, target=target) if scope else None
+        if parsed_scope is None:
+            parsed_scope = ParsedScope(target=target, raw_input="all")
+        if not parsed_scope.frozen:
+            freeze_scope(parsed_scope)
+
+        store = SpecStore(root=suite_dir)
+        comparator = BehavioralComparator(Path(suite_dir))
+        history_dir = Path(suite_dir) / "convergence_history"
+        gap_analyzer = GapAnalyzer(store, history_dir)
+
+        orchestrator = ConvergenceOrchestrator(
+            spec_store=store,
+            comparator=comparator,
+            gap_analyzer=gap_analyzer,
+        )
+
+        config = ConvergenceConfig(
+            target_url=target_url,
+            clone_url=clone_url,
+            scope=parsed_scope,
+            max_iterations=max_iterations,
+            target_parity=target_parity,
+            repo=output,
+            history_dir=history_dir,
+        )
+
+        report = await orchestrator.run(config)
+        typer.echo(report.format_summary())
+        return report
+
+    report = asyncio.run(_run())
+    # Exit 0 if parity achieved or final parity meets target
+    if report.stop_reason != "parity_achieved" and report.final_parity < target_parity:
+        raise typer.Exit(code=1)
 
 
 @secrets_app.command("list")

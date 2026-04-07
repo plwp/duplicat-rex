@@ -259,8 +259,15 @@ class BehavioralComparator:
         test_files = sorted(conformance_dir.glob("test_*.py"))
 
         if scope is not None:
-            allowed = set(scope.feature_keys())
-            test_files = [f for f in test_files if _feature_from_path(f) in allowed]
+            # Support both models.Scope (feature_keys) and scope.Scope (feature_names)
+            if hasattr(scope, "feature_keys"):
+                allowed = set(scope.feature_keys())
+            elif hasattr(scope, "feature_names"):
+                allowed = set(scope.feature_names())
+            else:
+                allowed = set()
+            if allowed:
+                test_files = [f for f in test_files if _feature_from_path(f) in allowed]
 
         return test_files
 
