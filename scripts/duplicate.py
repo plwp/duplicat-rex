@@ -539,7 +539,7 @@ class DuplicatePipeline:
                 len(report.errors),
             )
             for err in report.errors:
-                errors.append(f"Recon error ({err.module_name}): {err.message}")
+                errors.append(f"Recon error ({err.error_type}): {err.message}")
             return report.total_facts
         except Exception as exc:  # noqa: BLE001
             msg = f"Recon failed: {exc}"

@@ -312,10 +312,12 @@ class BehavioralComparator:
 def _run_pytest(test_file: Path, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     """Run pytest on a single file, returning CompletedProcess."""
     import os
+    import sys
 
+    python = sys.executable or "python3"
     env = {**os.environ, **extra_env}
     return subprocess.run(
-        ["python", "-m", "pytest", str(test_file), "-v", "--tb=short", "--no-header"],
+        [python, "-m", "pytest", str(test_file), "-v", "--tb=short", "--no-header"],
         capture_output=True,
         text=True,
         env=env,

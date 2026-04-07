@@ -603,6 +603,9 @@ def _render_e2e_test_case(idx: int, flow: dict[str, Any], feature: str) -> str:
     """Render a single E2E Playwright test case."""
     component = flow.get("component", flow.get("name", f"{feature} component"))
     behavior = flow.get("behavior", flow.get("description", flow.get("claim", "User interaction")))
+    # Sanitize: remove newlines and excessive whitespace that break docstring indentation
+    component = " ".join(str(component).split())[:200]
+    behavior = " ".join(str(behavior).split())[:200]
     steps = flow.get("steps", flow.get("states", []))
 
     fn_name = f"test_e2e_{feature.replace('-', '_').replace(' ', '_')}_{idx}"
