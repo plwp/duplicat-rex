@@ -321,6 +321,59 @@ def converge(
         raise typer.Exit(code=1)
 
 
+@app.command()
+def analyze(
+    store: str = typer.Option(".", "--store", help="Root directory for .specstore"),
+) -> None:
+    """Analyze and curate gathered facts — filter noise, dedup, cluster."""
+    from scripts.fact_analyzer import FactAnalyzer
+    from scripts.spec_store import SpecStore
+
+    spec_store = SpecStore(root=store)
+    analyzer = FactAnalyzer(spec_store)
+
+    # Load all active facts from the store
+    index = spec_store._load_index()
+    all_facts = []
+    for fact_id, meta in index["facts"].items():
+        if not meta.get("deleted_at") and not meta.get("superseded_by"):
+            try:
+                all_facts.append(spec_store.get_fact(fact_id))
+            except Exception:  # noqa: BLE001
+                pass
+
+    if not all_facts:
+        typer.echo("No active facts found in store.")
+        return
+
+    report = analyzer.analyze_report(all_facts)
+
+    typer.echo(f"\n{'=' * 50}")
+    typer.echo("Fact Analysis Report")
+    typer.echo(f"{'=' * 50}")
+    typer.echo(f"Total facts:     {report.total_facts}")
+    typer.echo(f"Noise filtered:  {report.noise_filtered}")
+    typer.echo(f"Deduplicated:    {report.deduplicated}")
+    typer.echo(f"Kept:            {report.kept}")
+
+    if report.noise_patterns:
+        typer.echo("\nNoise breakdown:")
+        for rule, count in sorted(report.noise_patterns.items(), key=lambda x: -x[1]):
+            typer.echo(f"  {rule:30s} {count:>5d}")
+
+    if report.facts_by_feature:
+        typer.echo("\nFacts by feature (kept):")
+        for feat, count in sorted(report.facts_by_feature.items(), key=lambda x: -x[1]):
+            typer.echo(f"  {feat:30s} {count:>5d}")
+
+    if report.clusters:
+        typer.echo(f"\nSub-feature clusters ({len(report.clusters)}):")
+        for cluster, ids in sorted(report.clusters.items()):
+            typer.echo(f"  {cluster:40s} {len(ids):>4d} facts")
+
+    typer.echo("")
+
+
 @secrets_app.command("list")
 def secrets_list(
     service: str = typer.Option(DEFAULT_SERVICE, "--service", help="Keyring service namespace"),

@@ -202,10 +202,17 @@ class DuplicatePipeline:
         if output_repo_path:
             self._copy_screenshots(spec_store, output_repo_path, errors)
 
-        # --- Step 4: Synthesize specs ---
-        logger.info("[4/9] Synthesizing specs (%d facts)", recon_facts)
-        bundle = await self._synthesize_specs(
+        # --- Step 3.5: Analyze and curate facts ---
+        logger.info("[3.5/9] Analyzing and curating facts")
+        analyzed_facts = await self._analyze_facts(
             config, scope, spec_store, errors
+        )
+
+        # --- Step 4: Synthesize specs ---
+        fact_count = len(analyzed_facts) if analyzed_facts is not None else recon_facts
+        logger.info("[4/9] Synthesizing specs (%d analyzed facts)", fact_count)
+        bundle = await self._synthesize_specs(
+            config, scope, spec_store, errors, facts=analyzed_facts
         )
 
         # --- Step 5: Snapshot and commit specs ---
@@ -609,12 +616,48 @@ class DuplicatePipeline:
             logger.error(msg, exc_info=True)
             errors.append(msg)
 
+    async def _analyze_facts(
+        self,
+        config: DuplicateConfig,
+        scope: Scope,
+        spec_store: SpecStore,
+        errors: list[str],
+    ) -> list[Fact] | None:
+        """
+        Analyze and curate facts using FactAnalyzer.
+        """
+        try:
+            from scripts.fact_analyzer import FactAnalyzer
+            import scripts.keychain as keychain_module
+            from scripts.models import Fact
+
+            analyzer = FactAnalyzer(spec_store, keychain_module)
+            
+            # Gather all facts currently in the store for scoped features
+            all_raw_facts: list[Fact] = []
+            for feature in scope.feature_names():
+                all_raw_facts.extend(spec_store.get_facts_for_feature(feature))
+
+            if not all_raw_facts:
+                logger.warning("No facts found in store to analyze")
+                return []
+
+            analyzed_facts = await analyzer.analyze(all_raw_facts)
+            logger.info("Curation complete: %d raw -> %d analyzed facts", len(all_raw_facts), len(analyzed_facts))
+            return analyzed_facts
+        except Exception as exc:  # noqa: BLE001
+            msg = f"Fact analysis failed: {exc}"
+            logger.error(msg, exc_info=True)
+            errors.append(msg)
+            return None
+
     async def _synthesize_specs(
         self,
         config: DuplicateConfig,
         scope: Scope,
         spec_store: SpecStore,
         errors: list[str],
+        facts: list[Fact] | None = None,
     ) -> SpecBundle | None:
         """
         Synthesize a SpecBundle from gathered facts.
@@ -623,6 +666,7 @@ class DuplicatePipeline:
         """
         try:
             import scripts.keychain as keychain_module
+            from scripts.models import Fact  # Ensure Fact is available
 
             synthesizer = SpecSynthesizer(
                 spec_store=spec_store,
@@ -634,6 +678,7 @@ class DuplicatePipeline:
                 target_host,
                 scope,
                 use_multi_ai=config.use_multi_ai,
+                facts=facts,
             )
             logger.info("Synthesized %d spec items", len(bundle.spec_items))
             return bundle
