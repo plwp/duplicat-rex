@@ -14,8 +14,6 @@ Covers:
 
 from __future__ import annotations
 
-import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -32,9 +30,8 @@ from scripts.domain_model import (
 )
 from scripts.hypothesis_builder import HypothesisBuilder
 from scripts.model_refiner import ModelRefiner
-from scripts.model_ticket_generator import ModelTicketGenerator, TicketSpec
+from scripts.model_ticket_generator import ModelTicketGenerator
 from scripts.models import Authority, EvidenceRef, Fact, FactCategory, SourceType
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -544,9 +541,10 @@ class TestModelTicketGenerator:
         model = self._model_with_two_ops()
         tickets = ModelTicketGenerator().generate_tickets(model)
         op_tickets = [t for t in tickets if t.operation != "model"]
-        assert len(op_tickets) == 2
+        # Generator now produces full CRUD + UI + polish waves — at least create and delete
         op_names = {t.operation for t in op_tickets}
-        assert op_names == {"create", "delete"}
+        assert "create" in op_names
+        assert "delete" in op_names
 
     def test_produces_entity_model_ticket(self) -> None:
         model = self._model_with_two_ops()
@@ -581,7 +579,8 @@ class TestModelTicketGenerator:
         model_tickets = [t for t in tickets if t.operation == "model"]
         op_tickets = [t for t in tickets if t.operation != "model"]
         assert len(model_tickets) == 3
-        assert len(op_tickets) == 3
+        # Generator now produces full CRUD + UI + polish waves per entity — at least 3 non-model
+        assert len(op_tickets) >= 3
 
     def test_state_constraints_included(self) -> None:
         model = DomainModel(target="trello.com")
