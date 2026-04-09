@@ -374,6 +374,96 @@ def analyze(
     typer.echo("")
 
 
+@app.command()
+def model(
+    target: str = typer.Argument(..., help="Target SaaS URL or domain"),
+    scope: str = typer.Option("", "--scope", help="Comma-separated feature names to include"),
+    store: str = typer.Option(".", "--store", help="Root directory for .specstore (source of facts)"),
+    output_dir: str = typer.Option(".", "--output-dir", help="Directory to write model_v*.json snapshots"),
+    max_iterations: int = typer.Option(5, "--max-iterations", help="Max experiment-refine iterations"),
+    max_experiments: int = typer.Option(50, "--max-experiments", help="Max experiments per iteration"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Build model from facts only, skip experiments"),
+) -> None:
+    """Build domain model via scientific recon loop (observe → hypothesize → experiment → refine)."""
+    import json as _json
+
+    from scripts.fact_analyzer import FactAnalyzer
+    from scripts.hypothesis_builder import HypothesisBuilder
+    from scripts.scientific_recon import ScientificRecon
+    from scripts.spec_store import SpecStore
+
+    target_url = _normalise_url(target)
+    spec_store = SpecStore(root=store)
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    # Load and curate facts from the store
+    analyzer = FactAnalyzer(spec_store)
+    index = spec_store._load_index()
+    raw_facts = []
+    for fact_id, meta in index["facts"].items():
+        if not meta.get("deleted_at") and not meta.get("superseded_by"):
+            try:
+                raw_facts.append(spec_store.get_fact(fact_id))
+            except Exception:  # noqa: BLE001
+                pass
+
+    scope_list = [s.strip() for s in scope.split(",") if s.strip()] if scope else []
+    if scope_list:
+        raw_facts = [f for f in raw_facts if f.feature in scope_list]
+
+    curated_facts = asyncio.run(analyzer.analyze(raw_facts)) if raw_facts else []
+
+    typer.echo(f"Facts loaded: {len(raw_facts)} raw, {len(curated_facts)} curated")
+
+    if dry_run or not curated_facts:
+        # Build model from facts only — no experiments
+        dm = HypothesisBuilder().build(curated_facts or raw_facts, target_url)
+        dm.iteration = 0
+        snapshot = out / "model_v0.json"
+        dm.save(snapshot)
+        typer.echo(f"\nDomain model (dry run):")
+        typer.echo(f"  Entities:     {len(dm.entities)}")
+        typer.echo(f"  Hypotheses:   {dm.total_hypotheses()}")
+        typer.echo(f"  Confidence:   {dm.overall_confidence():.0%}")
+        typer.echo(f"  Saved to:     {snapshot}")
+        return
+
+    recon = ScientificRecon(
+        target_url=target_url,
+        output_dir=out,
+    )
+
+    dm = asyncio.run(
+        recon.run(
+            curated_facts,
+            max_iterations=max_iterations,
+            max_experiments=max_experiments,
+        )
+    )
+
+    # Final snapshot
+    final_path = out / "model_final.json"
+    dm.save(final_path)
+
+    typer.echo(f"\nDomain model (final):")
+    typer.echo(f"  Entities:     {len(dm.entities)}")
+    typer.echo(f"  Hypotheses:   {dm.total_hypotheses()}")
+    typer.echo(f"  Validated:    {dm.validated_hypotheses()}")
+    typer.echo(f"  Confidence:   {dm.overall_confidence():.0%}")
+    typer.echo(f"  Iterations:   {dm.iteration}")
+    typer.echo(f"  Saved to:     {final_path}")
+
+    if dm.entities:
+        typer.echo("\nEntities discovered:")
+        for name, entity in dm.entities.items():
+            typer.echo(
+                f"  {name:20s}  ops={len(entity.operations)}  "
+                f"fields={len(entity.fields)}  "
+                f"confidence={entity.confidence:.0%}"
+            )
+
+
 @secrets_app.command("list")
 def secrets_list(
     service: str = typer.Option(DEFAULT_SERVICE, "--service", help="Keyring service namespace"),
