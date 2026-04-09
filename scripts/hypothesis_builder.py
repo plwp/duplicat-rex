@@ -41,6 +41,13 @@ _CRUD_OPS = [
 # Segments that are not entity names (version prefixes, fixed path segments)
 _IGNORED_SEGMENTS = frozenset(["api", "v1", "v2", "v3", "1", "2", "3", "rest"])
 
+# Infrastructure path segments that are not product entities
+_INFRASTRUCTURE_PREFIXES = frozenset({
+    "gateway", "consent", "consenthub", "session", "heartbeat",
+    "object-resolver", "resolve", "tap-delivery", "personalization",
+    "accessible-product", "px", "wa", "td", "tr", "v", "flagcdn",
+})
+
 # Regex to detect ID-like path segments: {id}, :id, numeric, UUID-like,
 # or alphanumeric strings containing digits (likely IDs, not resource names).
 # Resource names are typically pure alphabetic (e.g. "boards", "cards").
@@ -88,6 +95,20 @@ def _parse_api_path(path: str) -> list[str]:
     return resources
 
 
+def _is_product_entity(name: str) -> bool:
+    """Filter out infrastructure path segments that aren't product entities."""
+    name_lower = name.lower()
+    if name_lower in _INFRASTRUCTURE_PREFIXES:
+        return False
+    if len(name_lower) <= 2:  # skip single/double letter paths
+        return False
+    if ":" in name or "." in name:  # skip UUIDs, domains, file extensions
+        return False
+    if re.match(r"^[a-f0-9-]{8,}$", name_lower):  # skip hex IDs/UUIDs
+        return False
+    return True
+
+
 class HypothesisBuilder:
     """Build an initial DomainModel from a list of observed Facts."""
 
@@ -119,6 +140,8 @@ class HypothesisBuilder:
 
             resources = _parse_api_path(path)
             for resource in resources:
+                if not _is_product_entity(resource):
+                    continue
                 if resource not in model.entities:
                     entity_name = _to_entity_name(resource)
                     entity = EntityHypothesis(
