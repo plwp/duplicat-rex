@@ -43,9 +43,23 @@ _IGNORED_SEGMENTS = frozenset(["api", "v1", "v2", "v3", "1", "2", "3", "rest"])
 
 # Infrastructure path segments that are not product entities
 _INFRASTRUCTURE_PREFIXES = frozenset({
+    # Gateway/infrastructure
     "gateway", "consent", "consenthub", "session", "heartbeat",
     "object-resolver", "resolve", "tap-delivery", "personalization",
-    "accessible-product", "px", "wa", "td", "tr", "v", "flagcdn",
+    "accessible-product", "flagcdn", "graphql", "batch",
+    # Short noise segments
+    "px", "wa", "td", "tr", "v", "u", "b", "w",
+    # Analytics/tracking
+    "li_sync", "activity", "activityi",
+    # Known non-product paths
+    "home", "inbox", "planner", "pricing", "butler-automation",
+    "power-ups", "integrations", "templates",
+    # Atlassian internal
+    "slack", "trello", "atlassian-connect", "migration",
+    "connect-fields-migration-test-app", "connect-read-only-date",
+    "app-software", "product-listing", "developer-space",
+    # Cookie/consent
+    "cookies", "cooky", "cookys",
 })
 
 # Regex to detect ID-like path segments: {id}, :id, numeric, UUID-like,
@@ -112,14 +126,51 @@ def _is_product_entity(name: str) -> bool:
 class HypothesisBuilder:
     """Build an initial DomainModel from a list of observed Facts."""
 
-    def build(self, facts: list[Fact], target: str) -> DomainModel:
+    def build(
+        self,
+        facts: list[Fact],
+        target: str,
+        seed_entities: list[dict[str, Any]] | None = None,
+    ) -> DomainModel:
         model = DomainModel(target=target)
+        if seed_entities:
+            self._seed_entities(seed_entities, model)
         self._extract_entities_from_api_paths(facts, model)
         self._extract_fields_from_responses(facts, model)
         self._extract_operations_from_facts(facts, model)
         self._infer_relationships(model)
         self._add_standard_crud_hypotheses(model)
         return model
+
+    def _seed_entities(
+        self, seeds: list[dict[str, Any]], model: DomainModel
+    ) -> None:
+        """Pre-populate the model with known entities."""
+        for seed in seeds:
+            name = seed["name"]
+            if name not in model.entities:
+                entity = EntityHypothesis(
+                    name=name,
+                    plural=seed.get("plural", name.lower() + "s"),
+                    api_prefix=seed.get("api_prefix", f"/api/{name.lower()}s"),
+                    states=seed.get("states", []),
+                    evidence=["seeded from domain knowledge"],
+                )
+                # Add seed fields
+                for field_name, field_type in seed.get("fields", {}).items():
+                    entity.fields[field_name] = FieldHypothesis(
+                        name=field_name,
+                        field_type=FieldType(field_type) if field_type in FieldType.__members__.values() else FieldType.STRING,
+                        evidence=["seeded"],
+                    )
+                # Add seed relationships
+                for rel in seed.get("relationships", []):
+                    entity.relationships.append(RelationshipHypothesis(
+                        from_entity=name,
+                        to_entity=rel["to"],
+                        relation_type=rel.get("type", "has_many"),
+                    ))
+                model.entities[name] = entity
 
     # ------------------------------------------------------------------
     # Phase 1: discover entities from URL patterns
