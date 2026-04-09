@@ -49,6 +49,41 @@ from scripts.recon.base import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Source-level noise filters — skip these before creating CapturedRequest
+# ---------------------------------------------------------------------------
+
+# Extensions that are never product API calls
+_STATIC_EXTENSIONS: frozenset[str] = frozenset({
+    ".js", ".css", ".woff", ".woff2", ".ttf", ".svg", ".png", ".jpg",
+    ".jpeg", ".gif", ".ico", ".webp", ".map", ".gz",
+})
+
+# Known noise path segments
+_NOISE_PATHS: frozenset[str] = frozenset({
+    "gasv3", "analytics", "recaptcha", "sentry", "onetrust", "pagead",
+    "adsct", "gtag", "collect", "pixels", "rmkt", "ddm", "webevents",
+    "flagcdn", "flags/api", "contentful", "rz1oowkt5gyp",
+    "cookieconsentpub", "scripttemplates", "attribution_trigger",
+    "activityi", "gmp/conversion", "viewthroughconversion",
+    "1p-user-list", "1p-conversion",
+})
+
+# Known noise domains
+_NOISE_DOMAINS: frozenset[str] = frozenset({
+    "analytics.twitter.com",
+    "www.google-analytics.com",
+    "googleads.g.doubleclick.net",
+    "www.googletagmanager.com",
+    "bat.bing.com",
+    "px.ads.linkedin.com",
+    "snap.licdn.com",
+    "www.facebook.com",
+    "connect.facebook.net",
+    "www.recaptcha.net",
+    "sentry.io",
+})
+
+# ---------------------------------------------------------------------------
 # Internal data structures for captured network traffic
 # ---------------------------------------------------------------------------
 
@@ -63,7 +98,8 @@ class CapturedRequest:
     request_body: str | None = None
     response_status: int | None = None
     response_headers: dict[str, str] = field(default_factory=dict)
-    response_body: str | None = None
+    response_body: str | None = None  # JSON response body (first 10KB) for product API calls
+    content_type: str = ""
     duration_ms: float | None = None
     captured_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
@@ -208,7 +244,9 @@ class BrowserExploreModule(ReconModule):
                 # Wire up network interception
                 http_captures: list[CapturedRequest] = []
                 ws_captures: list[CapturedWsFrame] = []
-                self._attach_network_interceptor(page, http_captures, ws_captures)
+                _base = request.base_url or f"https://{request.target}"
+                target_host = urlparse(_base).hostname or request.target
+                self._attach_network_interceptor(page, http_captures, ws_captures, target_host)
 
                 # Phase: auth — skip if we loaded auth state
                 if auth_state_path and Path(auth_state_path).exists():
@@ -337,33 +375,84 @@ class BrowserExploreModule(ReconModule):
         browser = await pw.chromium.launch(headless=True)
         return browser, True
 
+    @staticmethod
+    def _is_product_request(url: str, target_host: str) -> bool:
+        """Return True if this request is likely a product API call, not noise."""
+        import re as _re
+
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+
+        # Check domain — known noise domains are always rejected
+        if host in _NOISE_DOMAINS:
+            return False
+
+        # Check path extension
+        path = parsed.path.lower()
+        for ext in _STATIC_EXTENSIONS:
+            if path.endswith(ext):
+                return False
+
+        # Check for chunk/hash patterns (webpack bundles like /abc1f2e3.abc1f2e3.js)
+        if _re.search(r"/[a-f0-9]{8,}\.[a-f0-9]+\.", path):
+            return False
+
+        # Check noise path segments
+        for noise in _NOISE_PATHS:
+            if noise in path:
+                return False
+
+        # Accept: same-origin requests
+        if target_host and (target_host in host or host == ""):
+            return True
+
+        return False
+
     def _attach_network_interceptor(
         self,
         page: Any,
         http_captures: list[CapturedRequest],
         ws_captures: list[CapturedWsFrame],
+        target_host: str = "",
     ) -> None:
         """
         Wire up Playwright event listeners to capture HTTP and WebSocket traffic.
+        Only product API calls (same-origin, non-static, non-analytics) are captured.
         All captures go into the shared lists — thread-safe within a single asyncio loop.
         """
 
         async def on_response(response: Any) -> None:
             try:
                 req = response.request
+                url = req.url
+
+                # Skip non-product requests at source — do not create CapturedRequest
+                if not self._is_product_request(url, target_host):
+                    return
+
                 t0 = time.monotonic()
-                try:
-                    body = await response.text()
-                except Exception:  # noqa: BLE001
-                    body = None
+                resp_headers = dict(response.headers)
+                content_type = resp_headers.get("content-type", "")
+
+                # Capture JSON response body for product API calls (up to 10KB)
+                body: str | None = None
+                if "application/json" in content_type:
+                    try:
+                        body = await response.text()
+                        if body:
+                            body = body[:10240]
+                    except Exception:  # noqa: BLE001
+                        body = None
+
                 captured = CapturedRequest(
-                    url=req.url,
+                    url=url,
                     method=req.method,
                     request_headers=dict(req.headers),
                     request_body=req.post_data,
                     response_status=response.status,
-                    response_headers=dict(response.headers),
+                    response_headers=resp_headers,
                     response_body=body,
+                    content_type=content_type,
                     duration_ms=(time.monotonic() - t0) * 1000,
                 )
                 http_captures.append(captured)
@@ -719,9 +808,19 @@ class BrowserExploreModule(ReconModule):
                     "response_headers": safe_resp_headers,
                     "duration_ms": req.duration_ms,
                 }
-                # Only include non-sensitive body snippets
-                if req.response_body and len(req.response_body) <= 4096:
-                    structured["response_body_sample"] = req.response_body[:1000]
+                # Include JSON response fields for domain model extraction
+                if req.response_body:
+                    if len(req.response_body) <= 4096:
+                        structured["response_body_sample"] = req.response_body[:1000]
+                    try:
+                        body_data = json.loads(req.response_body)
+                        if isinstance(body_data, dict):
+                            structured["response_fields"] = list(body_data.keys())
+                            structured["response_sample"] = {
+                                k: type(v).__name__ for k, v in body_data.items()
+                            }
+                    except json.JSONDecodeError:
+                        pass
 
                 facts.append(
                     Fact(
