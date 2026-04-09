@@ -632,11 +632,18 @@ class DuplicatePipeline:
             from scripts.models import Fact
 
             analyzer = FactAnalyzer(spec_store, keychain_module)
-            
-            # Gather all facts currently in the store for scoped features
+
+            # Gather ALL facts in the store — the analyzer handles filtering/reclassifying
+            # (querying by scoped feature misses facts that need reclassification)
             all_raw_facts: list[Fact] = []
-            for feature in scope.feature_names():
-                all_raw_facts.extend(spec_store.get_facts_for_feature(feature))
+            facts_dir = spec_store._facts_dir
+            if facts_dir.exists():
+                for fp in facts_dir.glob("*.json"):
+                    try:
+                        data = json.loads(fp.read_text())
+                        all_raw_facts.append(Fact.from_dict(data))
+                    except Exception:  # noqa: BLE001, S110
+                        pass
 
             if not all_raw_facts:
                 logger.warning("No facts found in store to analyze")
