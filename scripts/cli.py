@@ -529,6 +529,124 @@ def generate_tickets(
         raise typer.Exit(1)
 
 
+@app.command("visual-compare")
+def visual_compare(
+    target: str = typer.Argument(..., help="Target SaaS URL or domain"),
+    clone_url: str = typer.Option("http://localhost:3002", "--clone-url", help="URL of the clone"),
+    pages: str = typer.Option(
+        "/,/login,/signup,/boards,/pricing",
+        "--pages",
+        help="Comma-separated page paths to compare",
+    ),
+    output_dir: str = typer.Option(".", "--output-dir", help="Directory for screenshots"),
+    target_auth: str = typer.Option("", "--target-auth", help="Path to target auth storage state"),
+    clone_auth: str = typer.Option("", "--clone-auth", help="Path to clone auth storage state"),
+    min_parity: float = typer.Option(
+        0.0, "--min-parity", help="Exit 1 if visual parity falls below this threshold"
+    ),
+) -> None:
+    """Compare target and clone visually using screenshots and DOM analysis."""
+    from scripts.visual_comparator import VisualComparator, format_visual_report
+
+    target_url = _normalise_url(target)
+    clone_url = _normalise_url(clone_url)
+    page_list = [p.strip() for p in pages.split(",") if p.strip()]
+
+    async def _run() -> float:
+        comparator = VisualComparator(output_dir=Path(output_dir))
+        result = await comparator.compare(
+            target_url=target_url,
+            clone_url=clone_url,
+            pages=page_list,
+            target_auth_state=target_auth or None,
+            clone_auth_state=clone_auth or None,
+        )
+        typer.echo(format_visual_report(result))
+        return result.overall_parity
+
+    parity = asyncio.run(_run())
+    if parity < min_parity:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def verify(
+    clone_url: str = typer.Argument(..., help="URL of the clone to verify"),
+    model_path: str = typer.Option("", "--model", help="Path to domain model JSON"),
+    tickets_path: str = typer.Option("", "--tickets", help="Path to tickets JSON"),
+) -> None:
+    """Verify implementation meets acceptance criteria."""
+    import json
+
+    from scripts.domain_model import DomainModel
+    from scripts.model_ticket_generator import ModelTicketGenerator, TicketSpec
+    from scripts.verification_gate import VerificationGate
+
+    tickets: list[TicketSpec] = []
+
+    if tickets_path:
+        p = Path(tickets_path)
+        if not p.exists():
+            typer.echo(f"Error: tickets file not found: {tickets_path}", err=True)
+            raise typer.Exit(1)
+        raw = json.loads(p.read_text())
+        # Expect a list of dicts with at minimum id, title, entity, operation, priority
+        for item in raw:
+            tickets.append(
+                TicketSpec(
+                    id=item.get("id", ""),
+                    title=item.get("title", ""),
+                    entity=item.get("entity", ""),
+                    operation=item.get("operation", ""),
+                    priority=item.get("priority", 2),
+                    api_method=item.get("api_method", ""),
+                    api_endpoint=item.get("api_endpoint", ""),
+                    ui_location=item.get("ui_location", ""),
+                    ui_components=item.get("ui_components", []),
+                    acceptance_criteria=item.get("acceptance_criteria", []),
+                )
+            )
+    elif model_path:
+        p = Path(model_path)
+        if not p.exists():
+            typer.echo(f"Error: model file not found: {model_path}", err=True)
+            raise typer.Exit(1)
+        dm = DomainModel.load(p)
+        generator = ModelTicketGenerator()
+        tickets = generator.generate_tickets(dm)
+    else:
+        typer.echo(
+            "Error: provide --model <path> or --tickets <path>", err=True
+        )
+        raise typer.Exit(1)
+
+    typer.echo(f"Verifying {len(tickets)} ticket(s) against {clone_url} ...")
+
+    gate = VerificationGate(clone_url=clone_url)
+    results = asyncio.run(gate.verify_all(tickets))
+
+    passed = sum(1 for r in results if r.passed)
+    failed = len(results) - passed
+
+    typer.echo(f"\n{'=' * 50}")
+    typer.echo(f"Verification Results: {passed} passed, {failed} failed")
+    typer.echo(f"{'=' * 50}")
+
+    for result in results:
+        status = "PASS" if result.passed else "FAIL"
+        typer.echo(f"\n[{status}] {result.ticket_id}")
+        for check in result.checks:
+            icon = "✓" if check.passed else "✗"
+            typer.echo(f"  {icon} [{check.method}] {check.criterion}")
+            typer.echo(f"      {check.evidence}")
+            if check.screenshot:
+                typer.echo(f"      Screenshot: {check.screenshot}")
+
+    typer.echo("")
+    if failed > 0:
+        raise typer.Exit(1)
+
+
 @secrets_app.command("list")
 def secrets_list(
     service: str = typer.Option(DEFAULT_SERVICE, "--service", help="Keyring service namespace"),
