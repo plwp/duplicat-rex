@@ -464,6 +464,71 @@ def model(
             )
 
 
+@app.command("generate-tickets")
+def generate_tickets(
+    model_path: str = typer.Argument(..., help="Path to domain model JSON"),
+    repo: str = typer.Option("", "--repo", help="GitHub repo to create issues in (owner/repo)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print tickets without creating issues"),
+) -> None:
+    """Generate granular implementation tickets from a domain model."""
+    import subprocess
+
+    from scripts.domain_model import DomainModel
+    from scripts.model_ticket_generator import ModelTicketGenerator
+
+    model_file = Path(model_path)
+    if not model_file.exists():
+        typer.echo(f"Error: model file not found: {model_path}", err=True)
+        raise typer.Exit(1)
+
+    dm = DomainModel.load(model_file)
+    generator = ModelTicketGenerator()
+    tickets = generator.generate_tickets(dm)
+
+    typer.echo(f"\nGenerated {len(tickets)} tickets from {len(dm.entities)} entities")
+    typer.echo(f"  Priority 1 (model):       {sum(1 for t in tickets if t.priority == 1)}")
+    typer.echo(f"  Priority 2 (CRUD):        {sum(1 for t in tickets if t.priority == 2)}")
+    typer.echo(f"  Priority 3 (transitions): {sum(1 for t in tickets if t.priority == 3)}")
+    typer.echo(f"  Priority 4 (UI):          {sum(1 for t in tickets if t.priority == 4)}")
+    typer.echo(f"  Priority 5 (polish):      {sum(1 for t in tickets if t.priority == 5)}")
+
+    if dry_run:
+        typer.echo("\nTickets (dry run):")
+        for ticket in sorted(tickets, key=lambda t: (t.priority, t.entity, t.id)):
+            typer.echo(f"  [{ticket.priority}] #{ticket.id}: {ticket.title}")
+        return
+
+    if not repo:
+        typer.echo("\nNo --repo specified. Use --dry-run to preview or --repo owner/repo to create issues.")
+        return
+
+    typer.echo(f"\nCreating GitHub issues in {repo} ...")
+    created = 0
+    failed = 0
+    for ticket in sorted(tickets, key=lambda t: (t.priority, t.entity, t.id)):
+        body = generator.render_issue_body(ticket)
+        labels = ",".join(ticket.labels) if ticket.labels else ""
+        cmd = [
+            "gh", "issue", "create",
+            "--repo", repo,
+            "--title", ticket.title,
+            "--body", body,
+        ]
+        if labels:
+            cmd += ["--label", labels]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            typer.echo(f"  Created: {ticket.title}")
+            created += 1
+        else:
+            typer.echo(f"  Failed:  {ticket.title} — {result.stderr.strip()}", err=True)
+            failed += 1
+
+    typer.echo(f"\nDone: {created} created, {failed} failed")
+    if failed > 0:
+        raise typer.Exit(1)
+
+
 @secrets_app.command("list")
 def secrets_list(
     service: str = typer.Option(DEFAULT_SERVICE, "--service", help="Keyring service namespace"),
