@@ -30,7 +30,7 @@ from pathlib import Path
 from scripts.compare import BehavioralComparator
 from scripts.converge import ConvergenceConfig, ConvergenceOrchestrator, ConvergenceReport
 from scripts.gap_analyzer import GapAnalyzer
-from scripts.models import BundleStatus, SpecBundle
+from scripts.models import BundleStatus, Fact, SpecBundle
 from scripts.scope import Scope, freeze_scope, parse_scope
 from scripts.spec_store import SpecStore
 from scripts.spec_synthesizer import SpecSynthesizer
@@ -627,9 +627,8 @@ class DuplicatePipeline:
         Analyze and curate facts using FactAnalyzer.
         """
         try:
-            from scripts.fact_analyzer import FactAnalyzer
             import scripts.keychain as keychain_module
-            from scripts.models import Fact
+            from scripts.fact_analyzer import FactAnalyzer
 
             analyzer = FactAnalyzer(spec_store, keychain_module)
 
@@ -650,7 +649,11 @@ class DuplicatePipeline:
                 return []
 
             analyzed_facts = await analyzer.analyze(all_raw_facts)
-            logger.info("Curation complete: %d raw -> %d analyzed facts", len(all_raw_facts), len(analyzed_facts))
+            logger.info(
+                "Curation complete: %d raw -> %d analyzed facts",
+                len(all_raw_facts),
+                len(analyzed_facts),
+            )
             return analyzed_facts
         except Exception as exc:  # noqa: BLE001
             msg = f"Fact analysis failed: {exc}"
@@ -673,7 +676,6 @@ class DuplicatePipeline:
         """
         try:
             import scripts.keychain as keychain_module
-            from scripts.models import Fact  # Ensure Fact is available
 
             synthesizer = SpecSynthesizer(
                 spec_store=spec_store,

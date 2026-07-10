@@ -378,14 +378,26 @@ def analyze(
 def model(
     target: str = typer.Argument(..., help="Target SaaS URL or domain"),
     scope: str = typer.Option("", "--scope", help="Comma-separated feature names to include"),
-    store: str = typer.Option(".", "--store", help="Root directory for .specstore (source of facts)"),
-    output_dir: str = typer.Option(".", "--output-dir", help="Directory to write model_v*.json snapshots"),
-    max_iterations: int = typer.Option(5, "--max-iterations", help="Max experiment-refine iterations"),
-    max_experiments: int = typer.Option(50, "--max-experiments", help="Max experiments per iteration"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Build model from facts only, skip experiments"),
+    store: str = typer.Option(
+        ".", "--store", help="Root directory for .specstore (source of facts)"
+    ),
+    output_dir: str = typer.Option(
+        ".", "--output-dir", help="Directory to write model_v*.json snapshots"
+    ),
+    max_iterations: int = typer.Option(
+        5, "--max-iterations", help="Max experiment-refine iterations"
+    ),
+    max_experiments: int = typer.Option(
+        50, "--max-experiments", help="Max experiments per iteration"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Build model from facts only, skip experiments"
+    ),
 ) -> None:
-    """Build domain model via scientific recon loop (observe → hypothesize → experiment → refine)."""
-    import json as _json
+    """Build domain model via scientific recon loop.
+
+    Loop: observe → hypothesize → experiment → refine.
+    """
 
     from scripts.fact_analyzer import FactAnalyzer
     from scripts.hypothesis_builder import HypothesisBuilder
@@ -422,7 +434,7 @@ def model(
         dm.iteration = 0
         snapshot = out / "model_v0.json"
         dm.save(snapshot)
-        typer.echo(f"\nDomain model (dry run):")
+        typer.echo("\nDomain model (dry run):")
         typer.echo(f"  Entities:     {len(dm.entities)}")
         typer.echo(f"  Hypotheses:   {dm.total_hypotheses()}")
         typer.echo(f"  Confidence:   {dm.overall_confidence():.0%}")
@@ -446,7 +458,7 @@ def model(
     final_path = out / "model_final.json"
     dm.save(final_path)
 
-    typer.echo(f"\nDomain model (final):")
+    typer.echo("\nDomain model (final):")
     typer.echo(f"  Entities:     {len(dm.entities)}")
     typer.echo(f"  Hypotheses:   {dm.total_hypotheses()}")
     typer.echo(f"  Validated:    {dm.validated_hypotheses()}")
@@ -499,7 +511,10 @@ def generate_tickets(
         return
 
     if not repo:
-        typer.echo("\nNo --repo specified. Use --dry-run to preview or --repo owner/repo to create issues.")
+        typer.echo(
+            "\nNo --repo specified. Use --dry-run to preview or "
+            "--repo owner/repo to create issues."
+        )
         return
 
     typer.echo(f"\nCreating GitHub issues in {repo} ...")
