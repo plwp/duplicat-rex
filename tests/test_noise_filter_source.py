@@ -15,8 +15,7 @@ import uuid
 from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
-
+from scripts.hypothesis_builder import HypothesisBuilder, _is_product_entity
 from scripts.models import (
     Authority,
     EvidenceRef,
@@ -33,8 +32,6 @@ from scripts.recon.browser_explore import (
     CapturedRequest,
     NavigationStep,
 )
-from scripts.hypothesis_builder import HypothesisBuilder, _is_product_entity
-
 
 # ---------------------------------------------------------------------------
 # Helpers

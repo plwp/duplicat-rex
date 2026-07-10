@@ -160,7 +160,11 @@ class HypothesisBuilder:
                 for field_name, field_type in seed.get("fields", {}).items():
                     entity.fields[field_name] = FieldHypothesis(
                         name=field_name,
-                        field_type=FieldType(field_type) if field_type in FieldType.__members__.values() else FieldType.STRING,
+                        field_type=(
+                            FieldType(field_type)
+                            if field_type in FieldType.__members__.values()
+                            else FieldType.STRING
+                        ),
                         evidence=["seeded"],
                     )
                 # Add seed relationships

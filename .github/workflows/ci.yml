@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    env:
+      # The keychain tests exercise the real `keyring` API. A headless CI
+      # runner has no Secret Service / macOS Keychain, so point keyring at a
+      # non-interactive file backend (from keyrings.alt, pulled in by the dev
+      # extra). Without this the keychain tests would hang or error.
+      PYTHON_KEYRING_BACKEND: keyrings.alt.file.PlaintextKeyring
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Installs runtime deps (httpx, beautifulsoup4, lxml, ...) plus the
+          # dev extra (pytest, pytest-asyncio, ruff, mypy, keyrings.alt). The
+          # heavy 'browser' extra (playwright) is intentionally NOT installed —
+          # it is lazily imported and not exercised by the test suite.
+          pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check .
+      - name: Test
+        # Run serially: several tests use real asyncio.sleep backoffs and the
+        # keychain tests are not fork-safe, so pytest-xdist is avoided here.
+        run: pytest -q

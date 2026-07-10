@@ -21,9 +21,13 @@ pip-wheel-metadata/
 
 # Testing
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 .mypy_cache/
+
+# Runtime artifacts (spec store, convergence snapshots)
+.specstore/
 
 # Node
 node_modules/

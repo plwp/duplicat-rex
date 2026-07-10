@@ -10,13 +10,27 @@ requires-python = ">=3.11"
 dependencies = [
     "typer>=0.12",
     "keyring>=24",
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.2",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "pytest-asyncio>=0.23",
     "ruff>=0.4",
     "mypy>=1.10",
+    # Non-interactive keyring backend for CI: the keychain tests exercise the
+    # real `keyring` API, which on a headless runner has no Secret Service /
+    # macOS Keychain. keyrings.alt provides a file/null backend so those tests
+    # run without prompting or crashing. Select it via PYTHON_KEYRING_BACKEND.
+    "keyrings.alt>=5.0",
+]
+# Heavy, lazily-imported browser-automation stack. Only needed for the
+# recon browser-explore / verification-gate paths; import-guarded elsewhere.
+browser = [
+    "playwright>=1.44",
 ]
 
 [project.scripts]
@@ -40,3 +54,4 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"

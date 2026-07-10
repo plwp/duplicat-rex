@@ -161,7 +161,9 @@ class ReconOrchestrator:
         auth failures gracefully via ReconResult.errors.
         """
         # Derive domain slug from target (e.g. "trello.com" → "trello-com")
-        domain_slug = target.replace("https://", "").replace("http://", "").split("/")[0].replace(".", "-")
+        domain_slug = (
+            target.replace("https://", "").replace("http://", "").split("/")[0].replace(".", "-")
+        )
 
         creds: dict[str, str] = {}
         for key in module.requires_credentials:
